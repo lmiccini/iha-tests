@@ -92,7 +92,6 @@
     - name: 09 Fix internalapi net
       ansible.builtin.shell: |
         C0N=$(echo "{{ hostvars['controller-0']['compute0'] }}"|cut -d. -f1)
-        C1N=$(echo "{{ hostvars['controller-0']['compute1'] }}"|cut -d. -f1)
 
         ssh root@$C0N "ifdown vlan20 || true; mv /etc/sysconfig/network-scripts/ifcfg-vlan20 /root/ifcfg-vlan20 || true;
                        echo 'DEVICE=eth1.20' > /etc/sysconfig/network-scripts/ifcfg-eth1.20;
@@ -108,20 +107,6 @@
                        echo 'IPADDR=172.17.0.100' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
                        ifup eth1.20;
                        sed -i 's/GRUB_TIMEOUT=0/GRUB_TIMEOUT=60/g' /etc/default/grub ; grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg; reboot"
-        ssh root@$C1N "ifdown vlan20 || true; mv /etc/sysconfig/network-scripts/ifcfg-vlan20 /root/ifcfg-vlan20 || true;
-                       echo 'DEVICE=eth1.20' > /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'MTU=1496' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'ONBOOT=yes' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'HOTPLUG=no' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'NM_CONTROLLED=yes' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'PEERDNS=no' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'VLAN=yes' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'PHYSDEV=eth1' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'BOOTPROTO=static' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'NETMASK=255.255.255.0' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       echo 'IPADDR=172.17.0.101' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
-                       ifup eth1.20;
-                       sed -i 's/GRUB_TIMEOUT=0/GRUB_TIMEOUT=60/g' /etc/default/grub ; grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg; reboot"
       changed_when: false
 
     - name: 09 Wait reboot
@@ -133,22 +118,6 @@
         C0N=$(echo "{{ hostvars['controller-0']['compute0'] }}"|cut -d. -f1)
         ssh root@$C0N 'dnf install -y fence-agents-kdump || true'
         ssh root@$C0N "echo '/bin/sleep 180' > /var/crash/sleep.sh; chmod +x /var/crash/sleep.sh;
-                       echo 'auto_reset_crashkernel yes' > /etc/kdump.conf ;
-                       echo 'path /var/crash' >> /etc/kdump.conf ;
-                       echo 'core_collector makedumpfile -l --message-level 7 -d 31' >> /etc/kdump.conf ;
-                       echo 'kdump_post /var/crash/sleep.sh' >> /etc/kdump.conf ;
-                       echo \"fence_kdump_nodes {{ hostvars['controller-0']['podip'] }}\" >> /etc/kdump.conf ;
-                       echo 'fence_kdump_args -p 7410 -f auto -c 0 -i 5' >> /etc/kdump.conf ;
-                       echo 'final_action poweroff' >> /etc/kdump.conf ;
-                       systemctl restart kdump ;
-                       echo 1 > /proc/sys/kernel/sysrq"
-      changed_when: false
-
-    - name: 09 Tweak kdump.conf on compute-1
-      ansible.builtin.shell: |
-        C1N=$(echo "{{ hostvars['controller-0']['compute1'] }}"|cut -d. -f1)
-        ssh root@$C1N 'dnf install -y fence-agents-kdump || true'
-        ssh root@$C1N "echo '/bin/sleep 120' > /var/crash/sleep.sh; chmod +x /var/crash/sleep.sh;
                        echo 'auto_reset_crashkernel yes' > /etc/kdump.conf ;
                        echo 'path /var/crash' >> /etc/kdump.conf ;
                        echo 'core_collector makedumpfile -l --message-level 7 -d 31' >> /etc/kdump.conf ;
@@ -189,7 +158,7 @@
 
     - name: 09 Wait evacuation
       ansible.builtin.pause:
-        minutes: 12
+        minutes: "{{ evacuation_time | default('12') }}"
 
 - name: 09 Check evacuation
   hosts: controller-0
@@ -241,26 +210,10 @@
       retries: 20
       delay: 10
 
-    - name: 09 Wait compute-1 to be up
-      openstack.cloud.compute_service_info:
-        cloud: default
-        binary: "nova-compute"
-        host: "{{ compute1 }}"
-      register: compute_1_status
-      until: "'up' in compute_1_status.compute_services | map(attribute='state')"
-      retries: 20
-      delay: 10
-
     - name: 09 Cleanup kdump.conf on compute-0
       ansible.builtin.shell: |
         C0N=$(echo "{{ hostvars['controller-0']['compute0'] }}"|cut -d. -f1)
         ssh root@$C0N "rm -rf /etc/kdump.conf; dnf reinstall kexec-tools -y; systemctl restart kdump"
-      changed_when: false
-
-    - name: 09 Cleanup kdump.conf on compute-1
-      ansible.builtin.shell: |
-        C1N=$(echo "{{ hostvars['controller-0']['compute1'] }}"|cut -d. -f1)
-        ssh root@$C1N "rm -rf /etc/kdump.conf; dnf reinstall kexec-tools -y; systemctl restart kdump"
       changed_when: false
 
     - name: 09 Reset iha configmap
