@@ -223,11 +223,11 @@
         name: c1
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
-        flavor: m1.nano
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
 - name: 07 Crash compute-0
   hosts: hypervisor
@@ -390,7 +390,7 @@
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
         wait: true
       loop: "{{ compute_details | selectattr('readable_hostname', 'ne', 'compute-0') | product(range(1, (num_vms | default(1) | int) + 1) | list) }}"
       loop_control:
@@ -424,7 +424,7 @@
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
 - name: 07 Crash compute-0
   hosts: hypervisor

@@ -90,11 +90,11 @@
         name: vm
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
-        flavor: m1.nano
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
     - name: 03 Create instance vm-ha
       openstack.cloud.server:
@@ -106,11 +106,11 @@
         name: vm-ha
         image: cirros-ha
         timeout: 200
-        flavor: m1.nano
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
 - name: 03 Crash compute-0
   hosts: hypervisor

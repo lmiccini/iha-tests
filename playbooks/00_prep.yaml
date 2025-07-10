@@ -77,19 +77,19 @@
 
     # create openstack networks/routers/etc
 
-    - name: Create privnet
+    - name: Create ihanet
       openstack.cloud.network:
         cloud: default
         state: present
-        name: privnet
+        name: ihanet
         external: false
 
-    - name: Create priv subnet
+    - name: Create iha subnet
       openstack.cloud.subnet:
         cloud: default
         state: present
-        name: privsubnet
-        network_name: privnet
+        name: ihasubnet
+        network_name: ihanet
         cidr: 192.168.200.0/24
         dns_nameservers:
           - 10.19.42.41
@@ -99,11 +99,11 @@
     - name: Create router
       openstack.cloud.router:
         cloud: default
-        name: myrouter
+        name: iharouter
         state: present
         network: public
         interfaces:
-          - privsubnet
+          - ihasubnet
 
     - name: Create security group
       openstack.cloud.security_group:
@@ -150,7 +150,7 @@
       openstack.cloud.compute_flavor:
         cloud: default
         state: present
-        name: m1.nano
+        name: iha.nano
         ram: 128
         vcpus: 1
         disk: 1

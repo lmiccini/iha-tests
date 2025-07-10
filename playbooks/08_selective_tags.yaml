@@ -59,7 +59,7 @@
       openstack.cloud.compute_flavor:
         cloud: default
         state: present
-        name: m1.nanoha
+        name: iha.nanoha
         ram: 128
         vcpus: 1
         disk: 1
@@ -68,7 +68,7 @@
 
     - name: 08 set flavor trait
       ansible.builtin.command:
-        cmd: openstack --os-cloud default flavor set --property trait:CUSTOM_HA=true m1.nanoha
+        cmd: openstack --os-cloud default flavor set --property trait:CUSTOM_HA=true iha.nanoha
       changed_when: false
 
     - name: 08 set resource provider trait
@@ -115,11 +115,11 @@
         name: vm-flavorha
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
-        flavor: m1.nanoha
+        flavor: iha.nanoha
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
     - name: 08 Create instance vm-ha
       openstack.cloud.server:
@@ -131,11 +131,11 @@
         name: vm-imageha
         image: cirros-ha
         timeout: 200
-        flavor: m1.nano
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
 - name: 08 Crash compute-0
   hosts: hypervisor
@@ -270,11 +270,11 @@
         name: vm-flavorha
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
-        flavor: m1.nanoha
+        flavor: iha.nanoha
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
     - name: 08 Create instance vm-imageha
       openstack.cloud.server:
@@ -286,11 +286,11 @@
         name: vm-imageha
         image: cirros-ha
         timeout: 200
-        flavor: m1.nano
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
 - name: 08 Crash compute-0
   hosts: hypervisor
@@ -430,11 +430,11 @@
         name: vm-flavorha
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
-        flavor: m1.nanoha
+        flavor: iha.nanoha
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
     - name: 08 Create instance vm-ha
       openstack.cloud.server:
@@ -446,11 +446,11 @@
         name: vm-imageha
         image: cirros-ha
         timeout: 200
-        flavor: m1.nano
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
-          - net-name: privnet
+          - net-name: ihanet
 
 - name: 08 Crash compute-0
   hosts: hypervisor
@@ -577,7 +577,7 @@
       openstack.cloud.compute_flavor:
         cloud: default
         state: absent
-        name: m1.nanoha
+        name: iha.nanoha
 
     - name: 08 Create results file (success)
       ansible.builtin.template:
