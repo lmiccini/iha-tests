@@ -134,7 +134,7 @@
       ansible.builtin.shell: |
         C0N=$(echo "{{ hostvars['controller-0']['compute0'] }}"|cut -d. -f1)
         ssh root@$C0N 'dnf install -y fence-agents-kdump || true'
-        ssh root@$C0N "echo '/bin/sleep 240' > /var/crash/sleep.sh; chmod +x /var/crash/sleep.sh;
+        ssh root@$C0N "echo '/bin/sleep 120' > /var/crash/sleep.sh; chmod +x /var/crash/sleep.sh;
                        echo '/bin/sleep 45' > /var/crash/sleeppre.sh; chmod +x /var/crash/sleeppre.sh;
                        echo 'auto_reset_crashkernel yes' > /etc/kdump.conf ;
                        echo 'path /var/crash' >> /etc/kdump.conf ;
@@ -143,6 +143,7 @@
                        echo 'kdump_pre /var/crash/sleeppre.sh' >> /etc/kdump.conf ;
                        echo \"fence_kdump_nodes {{ hostvars['controller-0']['podip'] }}\" >> /etc/kdump.conf ;
                        echo 'fence_kdump_args -p 7410 -f auto -c 0 -i 5' >> /etc/kdump.conf ;
+                       echo 'final_action poweroff' >> /etc/kdump.conf;
                        systemctl restart kdump ;
                        echo 1 > /proc/sys/kernel/sysrq"
       changed_when: false
