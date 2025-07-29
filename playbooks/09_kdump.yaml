@@ -19,6 +19,7 @@
   gather_facts: false
   vars:
     name: "09-test-kdump-before-evacuation"
+    _final_action: "{{ final_action | default('reboot') }}"
   tasks:
     - name: 09 Create results file (failure)
       ansible.builtin.template:
@@ -143,7 +144,7 @@
                        echo 'kdump_pre /var/crash/sleeppre.sh' >> /etc/kdump.conf ;
                        echo \"fence_kdump_nodes {{ hostvars['controller-0']['podip'] }}\" >> /etc/kdump.conf ;
                        echo 'fence_kdump_args -p 7410 -f auto -c 0 -i 5' >> /etc/kdump.conf ;
-                       echo 'final_action poweroff' >> /etc/kdump.conf;
+                       echo \"final_action {{ _final_action }}\" >> /etc/kdump.conf;
                        systemctl restart kdump ;
                        echo 1 > /proc/sys/kernel/sysrq"
       changed_when: false
@@ -161,6 +162,7 @@
                        echo 'kdump_pre /var/crash/sleeppre.sh' >> /etc/kdump.conf ;
                        echo \"fence_kdump_nodes {{ hostvars['controller-0']['podip'] }}\" >> /etc/kdump.conf ;
                        echo 'fence_kdump_args -p 7410 -f auto -c 0 -i 5' >> /etc/kdump.conf ;
+                       echo \"final_action {{ _final_action }}\" >> /etc/kdump.conf;
                        systemctl restart kdump ;
                        echo 1 > /proc/sys/kernel/sysrq"
       changed_when: false
