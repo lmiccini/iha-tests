@@ -120,8 +120,8 @@
       register: logs
       changed_when: false
       retries: 60
-      delay: 3
-      until: "'INFO InstanceHa DISABLE is true, not evacuating' in logs.stdout"
+      delay: 10
+      until: "'INFO InstanceHa DISABLE is true, not evacuating' in logs.stdout or 'INFO InstanceHA DISABLED is true, not evacuating' in logs.stdout"
 
     - name: 01 Save logs
       ansible.builtin.shell: oc logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
@@ -143,7 +143,7 @@
       register: hypervisor2
       changed_when: false
       retries: 60
-      delay: 3
+      delay: 10
       until: "hypervisor2.stdout not in hostvars['controller-0']['compute0']"
 
     - name: 01 Remove vm
@@ -171,7 +171,17 @@
         host: "{{ compute0 }}"
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
-      retries: 20
+      retries: 60
+      delay: 10
+
+    - name: 01 Wait compute-0 to be enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: "nova-compute"
+        host: "{{ compute0 }}"
+      register: compute_0_status
+      until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
+      retries: 60
       delay: 10
 
     - name: 01 Save logs

@@ -85,6 +85,10 @@
         openstack --os-cloud default aggregate set --property trait:CUSTOM_HA=true iha
       changed_when: false
 
+    - name: 04 sleep 60
+      ansible.builtin.pause:
+        minutes: 1
+
     - name: 04 Create instance vm-ha
       openstack.cloud.server:
         cloud: default
@@ -138,7 +142,7 @@
       register: hypervisor2
       changed_when: false
       retries: 60
-      delay: 3
+      delay: 10
       until: hypervisor2.stdout not in hostvars['controller-0']['compute0']
 
     - name: 04 Fetch hypervisor for instance vm-ha
@@ -184,8 +188,8 @@
       register: logs
       changed_when: false
       retries: 60
-      delay: 3
-      until: "'not part of an evacuable aggregate' in logs.stdout"
+      delay: 10
+      until: "'are not part of an evacuable aggregate' in logs.stdout or 'Computes not part of evacuable aggregate' in logs.stdout"
 
     - name: 04 Fetch hypervisor for instance vm
       ansible.builtin.shell: |
@@ -264,6 +268,16 @@
         host: "{{ compute0 }}"
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
+      retries: 12
+      delay: 10
+
+    - name: 04 Wait compute-0 to be enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: "nova-compute"
+        host: "{{ compute0 }}"
+      register: compute_0_status
+      until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
       delay: 10
 
@@ -274,6 +288,16 @@
         host: "{{ compute1 }}"
       register: compute_1_status
       until: "'up' in compute_1_status.compute_services | map(attribute='state')"
+      retries: 12
+      delay: 10
+
+    - name: 04 Wait compute-1 to be enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: "nova-compute"
+        host: "{{ compute1 }}"
+      register: compute_1_status
+      until: "'enabled' in compute_1_status.compute_services | map(attribute='status')"
       retries: 60
       delay: 10
 

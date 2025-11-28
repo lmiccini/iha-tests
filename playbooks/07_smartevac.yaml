@@ -213,6 +213,10 @@
         oc apply -f /home/zuul/iha-cm.yaml
       changed_when: false
 
+    - name: sleep
+      ansible.builtin.pause:
+        minutes: 1
+
     - name: 07 Create initial instance vm on compute-0
       openstack.cloud.server:
         cloud: default
@@ -343,6 +347,22 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
+      retries: 12
+      delay: 10
+
+    - name: 07 Wait for compute-0 to transition to 'enable' on OpenStack controller
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
+      retries: 12
+      delay: 10
+
+    - name: 07 Wait for compute-0 to transition to 'enable' on OpenStack controller
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
       retries: 12
       delay: 10
 
@@ -649,5 +669,13 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
+      retries: 12
+      delay: 10
+
+    - name: 07 Wait for compute-0 to transition to 'enable' on OpenStack controller
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
       retries: 12
       delay: 10
