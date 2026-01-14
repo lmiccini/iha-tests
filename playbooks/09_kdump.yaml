@@ -218,7 +218,7 @@
 
     - name: 99 check logs and see if we received the kdump msgs compute0
       ansible.builtin.shell: |
-        oc logs deploy/instanceha-0 |grep "{{ hostvars['localhost']['compute0'] }}"
+        oc logs deploy/instanceha-0 |grep "{{ hostvars['controller-0']['compute0'] }}"
       register: logs 
       changed_when: false
       retries: 60
