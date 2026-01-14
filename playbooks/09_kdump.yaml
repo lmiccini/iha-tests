@@ -19,7 +19,7 @@
   gather_facts: false
   vars:
     name: "09-test-kdump-before-evacuation"
-    _final_action: "{{ final_action | default('reboot') }}"
+    _final_action: "reboot"
   tasks:
     - name: 09 Create results file (failure)
       ansible.builtin.template:
@@ -209,16 +209,26 @@
         msg: "vm c1 not evacuated, this should not happen"
       when: hypervisor3.stdout in hostvars['controller-0']['compute0']
 
-    - name: 09 check logs and see if we received the kdump msgs compute0
-      ansible.builtin.shell: |
-        oc logs $(oc get pods |grep instanceha| awk '{print $1}') |grep "{{ hostvars['controller-0']['compute0'] }}" |grep 'are kdumping'
-      register: grep
-      changed_when: false
+#    - name: 09 check logs and see if we received the kdump msgs compute0
+#      ansible.builtin.shell: |
+#        oc logs $(oc get pods |grep instanceha| awk '{print $1}') |grep "{{ hostvars['controller-0']['compute0'] }}" |grep 'fenced via kdump'
+#      register: grep
+#      changed_when: false
+#
 
-    - name: 09 fail if we did not see any kdump msg
-      ansible.builtin.fail:
-        msg: "KDUMP msg not received"
-      when: grep.rc != 0
+    - name: 99 check logs and see if we received the kdump msgs compute0
+      ansible.builtin.shell: |
+        oc logs deploy/instanceha-0 |grep "{{ hostvars['localhost']['compute0'] }}"
+      register: logs 
+      changed_when: false
+      retries: 60
+      delay: 10 
+      until: "'are kdumping' in logs.stdout or 'fenced via kdump' in logs.stdout"
+
+#    - name: 09 fail if we did not see any kdump msg
+#      ansible.builtin.fail:
+#        msg: "KDUMP msg not received"
+#      when: grep.rc != 0
 
     - name: 09 save logs
       ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
