@@ -151,7 +151,7 @@
                        echo \"fence_kdump_nodes {{ hostvars['controller-0']['podip'] }}\" >> /etc/kdump.conf ;
                        echo 'fence_kdump_args -p 7410 -f auto -c 0 -i 5' >> /etc/kdump.conf ;
                        echo \"final_action {{ _final_action }}\" >> /etc/kdump.conf;
-                       systemctl restart kdump ;
+                       ip link set down vlan20 || true; systemctl restart kdump ;
                        echo 1 > /proc/sys/kernel/sysrq"
       changed_when: false
 
@@ -167,7 +167,7 @@
                        echo \"fence_kdump_nodes {{ hostvars['controller-0']['podip'] }}\" >> /etc/kdump.conf ;
                        echo 'fence_kdump_args -p 7410 -f auto -c 0 -i 5' >> /etc/kdump.conf ;
                        echo \"final_action {{ _final_action }}\" >> /etc/kdump.conf;
-                       systemctl restart kdump ;
+                       ip link set down vlan20 || true; systemctl restart kdump ;
                        echo 1 > /proc/sys/kernel/sysrq"
       changed_when: false
 
