@@ -105,7 +105,7 @@
         C0N=$(echo "{{ hostvars['controller-0']['compute0'] }}"|cut -d. -f1)
         C1N=$(echo "{{ hostvars['controller-0']['compute1'] }}"|cut -d. -f1)
 
-        ssh root@$C0N "ifdown vlan20 || true; mv /etc/sysconfig/network-scripts/ifcfg-vlan20 /root/ifcfg-vlan20 || true;
+        ssh root@$C0N "ifdown vlan20 || true; ip link set down vlan20 || true;  mv /etc/sysconfig/network-scripts/ifcfg-vlan20 /root/ifcfg-vlan20 || true;
                        echo 'DEVICE=eth1.20' > /etc/sysconfig/network-scripts/ifcfg-eth1.20;
                        echo 'MTU=1496' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
                        echo 'ONBOOT=yes' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
@@ -119,7 +119,7 @@
                        echo 'IPADDR=172.17.0.100' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
                        ifup eth1.20;
                        sed -i 's/GRUB_TIMEOUT=0/GRUB_TIMEOUT=60/g' /etc/default/grub ; grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg; reboot"
-        ssh root@$C1N "ifdown vlan20 || true; mv /etc/sysconfig/network-scripts/ifcfg-vlan20 /root/ifcfg-vlan20 || true;
+        ssh root@$C1N "ifdown vlan20 || true; ip link set down vlan20 || true; mv /etc/sysconfig/network-scripts/ifcfg-vlan20 /root/ifcfg-vlan20 || true;
                        echo 'DEVICE=eth1.20' > /etc/sysconfig/network-scripts/ifcfg-eth1.20;
                        echo 'MTU=1496' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
                        echo 'ONBOOT=yes' >> /etc/sysconfig/network-scripts/ifcfg-eth1.20;
@@ -229,7 +229,7 @@
     - name: 99 check logs and see if we received the kdump msgs compute0
       ansible.builtin.shell: |
         oc logs deploy/instanceha-0 |grep "{{ hostvars['controller-0']['compute0'] }}"
-      register: logs 
+      register: logs
       changed_when: false
       retries: 60
       delay: 10 
