@@ -19,7 +19,7 @@
   gather_facts: false
   vars:
     name: "09-test-kdump-before-evacuation"
-    _final_action: "reboot"
+    _final_action: "{{ final_action | default('reboot') }}"
   tasks:
     - name: 09 Create results file (failure)
       ansible.builtin.template:
