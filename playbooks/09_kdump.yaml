@@ -21,6 +21,16 @@
     name: "09-test-kdump-before-evacuation"
     _final_action: "{{ final_action | default('reboot') }}"
   tasks:
+    - shell: |
+        oc rsh deployment/instanceha-0 bash -c 'wc -l /var/lib/instanceha/instanceha.py' |awk '{print $1}'
+      register: size
+
+    - name: Define Variable
+      set_fact:
+          _final_action: "poweroff"
+      when:
+        - size.stdout |int < 1000
+
     - name: 09 Create results file (failure)
       ansible.builtin.template:
         src: templates/iha-tests-results.xml.j2
