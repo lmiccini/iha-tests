@@ -88,8 +88,8 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
-      delay: 5
+      retries: 24
+      delay: 10
       changed_when: false
 
     - name: 06 Create instance c1
