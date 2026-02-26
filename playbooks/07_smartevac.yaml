@@ -217,6 +217,18 @@
       ansible.builtin.pause:
         minutes: 1
 
+    - name: 07 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
     - name: 07 Create initial instance vm on compute-0
       openstack.cloud.server:
         cloud: default

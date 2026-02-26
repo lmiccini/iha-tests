@@ -177,6 +177,28 @@
                        echo 1 > /proc/sys/kernel/sysrq"
       changed_when: false
 
+    - name: 99 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ hostvars['controller-0']['compute0'] }}" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 99 Wait for compute-1 resource provider to be available in placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ hostvars['controller-0']['compute1'] }}" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
     - name: 09 Create instance c1
       openstack.cloud.server:
         cloud: default
