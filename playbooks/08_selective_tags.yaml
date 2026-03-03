@@ -116,37 +116,99 @@
       delay: 10
       changed_when: false
 
-    - name: 08 Create instance vm
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
-        name: vm-flavorha
-        image: cirros-0.6.2-iha-x86_64-disk.img
-        timeout: 200
-        flavor: iha.nanoha
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+    - name: 08 Create instance vm with retry
+      block:
+        - name: 08 Create instance vm
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-flavorha
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: iha.nanoha
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 08 Cleanup failed vm-flavorha instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm-flavorha
+          ignore_errors: true
 
-    - name: 08 Create instance vm-ha
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
-        name: vm-imageha
-        image: cirros-ha
-        timeout: 200
-        flavor: iha.nano
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+        - name: 08 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 08 Retry create instance vm
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-flavorha
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: iha.nanoha
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+
+    - name: 08 Create instance vm-ha with retry
+      block:
+        - name: 08 Create instance vm-ha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-imageha
+            image: cirros-ha
+            timeout: 200
+            flavor: iha.nano
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 08 Cleanup failed vm-imageha instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm-imageha
+          ignore_errors: true
+
+        - name: 08 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 08 Retry create instance vm-ha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-imageha
+            image: cirros-ha
+            timeout: 200
+            flavor: iha.nano
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
 
 - name: 08 Crash compute-0
   hosts: hypervisor
@@ -285,37 +347,99 @@
       ansible.builtin.pause:
         minutes: 1
 
-    - name: 08 Create instance vm-flavorha
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
-        name: vm-flavorha
-        image: cirros-0.6.2-iha-x86_64-disk.img
-        timeout: 200
-        flavor: iha.nanoha
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+    - name: 08 Create instance vm-flavorha with retry
+      block:
+        - name: 08 Create instance vm-flavorha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-flavorha
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: iha.nanoha
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 08 Cleanup failed vm-flavorha instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm-flavorha
+          ignore_errors: true
 
-    - name: 08 Create instance vm-imageha
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
-        name: vm-imageha
-        image: cirros-ha
-        timeout: 200
-        flavor: iha.nano
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+        - name: 08 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 08 Retry create instance vm-flavorha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-flavorha
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: iha.nanoha
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+
+    - name: 08 Create instance vm-imageha with retry
+      block:
+        - name: 08 Create instance vm-imageha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-imageha
+            image: cirros-ha
+            timeout: 200
+            flavor: iha.nano
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 08 Cleanup failed vm-imageha instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm-imageha
+          ignore_errors: true
+
+        - name: 08 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 08 Retry create instance vm-imageha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-imageha
+            image: cirros-ha
+            timeout: 200
+            flavor: iha.nano
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
 
 - name: 08 Crash compute-0
   hosts: hypervisor
@@ -455,37 +579,99 @@
         oc apply -f /home/zuul/iha-cm.yaml
       changed_when: false
 
-    - name: 08 Create instance vm
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
-        name: vm-flavorha
-        image: cirros-0.6.2-iha-x86_64-disk.img
-        timeout: 200
-        flavor: iha.nanoha
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+    - name: 08 Create instance vm with retry
+      block:
+        - name: 08 Create instance vm
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-flavorha
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: iha.nanoha
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 08 Cleanup failed vm-flavorha instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm-flavorha
+          ignore_errors: true
 
-    - name: 08 Create instance vm-ha
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
-        name: vm-imageha
-        image: cirros-ha
-        timeout: 200
-        flavor: iha.nano
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+        - name: 08 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 08 Retry create instance vm
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-flavorha
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: iha.nanoha
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+
+    - name: 08 Create instance vm-ha with retry
+      block:
+        - name: 08 Create instance vm-ha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-imageha
+            image: cirros-ha
+            timeout: 200
+            flavor: iha.nano
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 08 Cleanup failed vm-imageha instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm-imageha
+          ignore_errors: true
+
+        - name: 08 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 08 Retry create instance vm-ha
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ hostvars['controller-0']['compute0'] }}
+            name: vm-imageha
+            image: cirros-ha
+            timeout: 200
+            flavor: iha.nano
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
 
 - name: 08 Crash compute-0
   hosts: hypervisor

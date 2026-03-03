@@ -442,21 +442,52 @@
       loop_control:
         pause: 1
 
-    - name: 07 Create instance vm0 on compute-0
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: present
-        availability_zone: nova:{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}
-        name: vm0
-        image: cirros-0.6.2-iha-x86_64-disk.img
-        timeout: 200
-        flavor: fill
-        security_groups:
-          - ping
-        nics:
-          - net-name: ihanet
+    - name: 07 Create instance vm0 on compute-0 with retry
+      block:
+        - name: 07 Create instance vm0 on compute-0
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}
+            name: vm0
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: fill
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
+      rescue:
+        - name: 07 Cleanup failed vm0 instance
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: absent
+            name: vm0
+          ignore_errors: true
+
+        - name: 07 Wait before retry
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: 07 Retry create instance vm0 on compute-0
+          openstack.cloud.server:
+            cloud: default
+            auth:
+              project_name: admin
+            state: present
+            availability_zone: nova:{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}
+            name: vm0
+            image: cirros-0.6.2-iha-x86_64-disk.img
+            timeout: 200
+            flavor: fill
+            security_groups:
+              - ping
+            nics:
+              - net-name: ihanet
 
 - name: 07 Crash compute-0
   hosts: hypervisor
