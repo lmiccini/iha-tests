@@ -16,7 +16,7 @@
 
 # This test verifies heartbeat-based host filtering using the proper EDPM
 # workflow. A MetalLB LoadBalancer Service (172.17.0.81) fronts the InstanceHA
-# leader pod's UDP ports. The edpm_instanceha_monitoring role deploys the
+# pod's UDP ports. The edpm_instanceha_monitoring role deploys the
 # heartbeat sender on all compute nodes via an OpenStackDataPlaneDeployment.
 # When CHECK_HEARTBEAT is enabled and a compute node's nova-compute goes down
 # but the host OS is still alive (heartbeat packets still arriving),
@@ -133,7 +133,7 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    # ── Create MetalLB LoadBalancer Service targeting the leader pod ──
+    # ── Create MetalLB LoadBalancer Service ──
 
     - name: 23 Create MetalLB LoadBalancer Service for InstanceHA UDP ports
       kubernetes.core.k8s:
@@ -150,7 +150,6 @@
               metallb.universe.tf/loadBalancerIPs: 172.17.0.81
           spec:
             type: LoadBalancer
-            externalTrafficPolicy: Local
             selector:
               service: instanceha-0
             ports:
@@ -282,35 +281,21 @@
       ansible.builtin.pause:
         seconds: 60
 
-    - name: 23 Get instanceha leader pod
-      kubernetes.core.k8s_info:
-        kind: Pod
-        namespace: openstack
-        label_selectors:
-          - instanceha.openstack.org/leader=true
-      register: pod_list
-
-    - name: 23 Set instanceha leader pod name
-      ansible.builtin.set_fact:
-        instanceha_pod_name: "{{ pod_list.resources | map(attribute='metadata.name') | first | default('', true) }}"
-
     - name: 23 Verify heartbeat filtering log message
-      kubernetes.core.k8s_log:
-        namespace: openstack
-        name: "{{ instanceha_pod_name }}"
-        tail_lines: 200
-        all_containers: true
+      ansible.builtin.shell: |
+        oc logs -n openstack deploy/instanceha-0 --tail=200
       register: instanceha_logs
+      changed_when: false
       retries: 30
       delay: 10
-      until: "'skipping fencing' in instanceha_logs.log and 'heartbeat received' in instanceha_logs.log"
+      until: "'skipping fencing' in instanceha_logs.stdout and 'heartbeat received' in instanceha_logs.stdout"
 
     - name: 23 Assert heartbeat-based skip message found
       ansible.builtin.assert:
         that:
-          - "'skipping fencing' in instanceha_logs.log"
-          - "'heartbeat received' in instanceha_logs.log"
-          - "'nova-compute crash' in instanceha_logs.log or 'likely nova-compute crash' in instanceha_logs.log"
+          - "'skipping fencing' in instanceha_logs.stdout"
+          - "'heartbeat received' in instanceha_logs.stdout"
+          - "'nova-compute crash' in instanceha_logs.stdout or 'likely nova-compute crash' in instanceha_logs.stdout"
         fail_msg: "No heartbeat-based fencing skip message found in logs (LoadBalancer IP {{ lb_ip }})"
 
     - name: 23 Verify VM was NOT evacuated
@@ -365,7 +350,7 @@
       delay: 10
 
     - name: 23 Save logs
-      ansible.builtin.shell: oc -n openstack logs $(oc get pods -n openstack -l instanceha.openstack.org/leader=true -o jsonpath='{.items[0].metadata.name}') > /home/zuul/23_heartbeat.log
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/23_heartbeat.log
       changed_when: false
 
 - name: 23 Cleanup
