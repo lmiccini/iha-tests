@@ -174,13 +174,7 @@
 
     - name: Build compute details from service list
       ansible.builtin.set_fact:
-        compute_details: >-
-          {{ compute_details + [{
-            'hostname': item.host,
-            'readable_hostname': item.host | regex_replace('compute-[^.-]+-(\\d+).*', 'compute-\\1'),
-            'state': item.state,
-            'status': item.status
-          }] }}
+        compute_details: "{{ compute_details + [{'hostname': item.host, 'readable_hostname': (item.host | regex_replace('compute-[^.-]+-(\\d+).*', 'compute-\\1')), 'state': item.state, 'status': item.status}] }}"
       loop: "{{ hypervisor_list.compute_services }}"
       loop_control:
         label: "{{ item.host }}"
