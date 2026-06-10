@@ -58,7 +58,7 @@
         api_version: dataplane.openstack.org/v1beta1
         kind: OpenStackDataPlaneService
         namespace: openstack
-        name: instanceha-monitoring
+        name: instanceha-0-monitoring
       ignore_errors: true
 
 - name: 23 Configure heartbeat test
