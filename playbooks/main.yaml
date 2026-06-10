@@ -35,7 +35,7 @@
 #- import_playbook: 19_healthcheck.yaml
 #- import_playbook: 20_evacuation_retry.yaml
 #- import_playbook: 21_continue_on_failure.yaml
-- import_playbook: 22_reconciliation.yaml
+#- import_playbook: 22_reconciliation.yaml
 - import_playbook: 23_heartbeat.yaml
 - import_playbook: 24_application_credentials.yaml
 - import_playbook: 25_prometheus_metrics.yaml

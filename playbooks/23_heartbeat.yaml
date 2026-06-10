@@ -153,7 +153,6 @@
             externalTrafficPolicy: Local
             selector:
               service: instanceha-0
-              instanceha.openstack.org/leader: "true"
             ports:
             - name: kdump
               port: 7410
@@ -186,7 +185,7 @@
           apiVersion: dataplane.openstack.org/v1beta1
           kind: OpenStackDataPlaneService
           metadata:
-            name: instanceha-monitoring
+            name: instanceha-0-monitoring
             namespace: openstack
           spec:
             dataSources:
@@ -208,7 +207,7 @@
             nodeSets:
               - "{{ nodeset_name }}"
             servicesOverride:
-              - instanceha-monitoring
+              - instanceha-0-monitoring
             ansibleExtraVars:
               edpm_instanceha_monitoring_heartbeat_enabled: true
               edpm_instanceha_monitoring_heartbeat_ip: "{{ lb_ip }}"
@@ -417,7 +416,7 @@
             nodeSets:
               - "{{ nodeset_name }}"
             servicesOverride:
-              - instanceha-monitoring
+              - instanceha-0-monitoring
             ansibleExtraVars:
               edpm_instanceha_monitoring_heartbeat_enabled: false
 
@@ -439,7 +438,7 @@
         api_version: dataplane.openstack.org/v1beta1
         kind: OpenStackDataPlaneService
         namespace: openstack
-        name: instanceha-monitoring
+        name: instanceha-0-monitoring
 
     - name: 23 Remove MetalLB LoadBalancer Service
       kubernetes.core.k8s:
