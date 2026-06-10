@@ -14,13 +14,50 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+- name: Discover compute VMs on hypervisor
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+  tasks:
+    - name: List all running compute VMs
+      ansible.builtin.shell: |
+        virsh list --name | grep compute | sort
+      register: compute_vms
+      changed_when: false
+
+    - name: Fetch UUID for each compute VM
+      ansible.builtin.shell: |
+        virsh dumpxml {{ item }} | grep uuid | head -1 | cut -d '>' -f 2 | cut -d '<' -f 1
+      register: compute_uuids
+      loop: "{{ compute_vms.stdout_lines }}"
+      changed_when: false
+
+    - name: Build fencing entries
+      ansible.builtin.set_fact:
+        compute_fencing_entries: >-
+          {{ compute_fencing_entries | default([]) + [{
+            'name': item.item | regex_replace('^cifmw-', ''),
+            'agent': (idx == 1) | ternary('ipmi', 'redfish'),
+            'ipaddr': '192.168.111.9',
+            'ipport': (idx == 1) | ternary('6231', (8000 + idx) | string),
+            'login': 'admin',
+            'passwd': 'password',
+            'uuid': item.stdout
+          }] }}
+      loop: "{{ compute_uuids.results }}"
+      loop_control:
+        index_var: idx
+
 - name: Deploy Instance HA
   hosts: controller-0
   tasks:
     - name: Copy fencing-secret.yaml
       ansible.builtin.template:
-        src: templates/fencing-secret.yaml
+        src: templates/fencing-secret.yaml.j2
         dest: /home/zuul/fencing-secret.yaml
+      vars:
+        compute_fencing_entries: "{{ hostvars['hypervisor']['compute_fencing_entries'] }}"
 
     - name: Copy iha-config.yaml
       ansible.builtin.template:
@@ -31,24 +68,6 @@
       ansible.builtin.template:
         src: templates/iha.yaml.j2
         dest: /home/zuul/iha.yaml
-
-    - name: Fetch redfish UUIDs and fix fencing
-      ansible.builtin.shell: |
-        C0=$(ssh hypervisor sudo virsh list |grep compute |awk '{print $2}' |grep '\-0$')
-        C1=$(ssh hypervisor sudo virsh list |grep compute |awk '{print $2}' |grep '\-1$')
-
-        C0N=$(echo $C0 |sed 's/cifmw-//')
-        C1N=$(echo $C1 |sed 's/cifmw-//')
-
-        UUID0=$(ssh hypervisor sudo virsh dumpxml $C0 |grep uuid |cut -d '>' -f 2 |cut -d '<' -f 1)
-        UUID1=$(ssh hypervisor sudo virsh dumpxml $C1 |grep uuid |cut -d '>' -f 2 |cut -d '<' -f 1)
-
-        sed -i "s/computeA/$C0N/g" ~/fencing-secret.yaml
-        sed -i "s/computeB/$C1N/g" ~/fencing-secret.yaml
-
-        sed -i "s/UUID0/$UUID0/g" ~/fencing-secret.yaml
-        sed -i "s/UUID1/$UUID1/g" ~/fencing-secret.yaml
-      changed_when: false
 
     - name: Deploy OCP resources
       ansible.builtin.shell: |

@@ -1,0 +1,165 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 19 Test health check and readiness probe endpoints
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "19-test-healthcheck"
+
+  tasks:
+    - name: 19 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 19 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 19 Get instanceha pod name
+      ansible.builtin.shell: |
+        oc get pods -n openstack -l service=instanceha-0 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
+        oc get pods -n openstack -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep instanceha | head -1
+      register: pod_name_result
+      changed_when: false
+
+    - name: 19 Set instanceha pod name
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_name_result.stdout | trim }}"
+
+    - name: 19 Fail if no instanceha pod found
+      ansible.builtin.fail:
+        msg: "No instanceha pod found"
+      when: instanceha_pod_name == ""
+
+    - name: 19 Get instanceha pod IP
+      ansible.builtin.shell: |
+        oc get pod {{ instanceha_pod_name }} -n openstack -o jsonpath='{.status.podIP}'
+      register: pod_ip_result
+      changed_when: false
+
+    - name: 19 Set pod IP
+      ansible.builtin.set_fact:
+        instanceha_pod_ip: "{{ pod_ip_result.stdout | trim }}"
+
+    - name: 19 Test readiness probe endpoint /healthz
+      ansible.builtin.shell: |
+        oc exec {{ instanceha_pod_name }} -n openstack -- python3 -c "
+        import http.client, ssl, os
+        tls = os.path.exists(os.environ.get('METRICS_TLS_CERT', ''))
+        if tls:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            conn = http.client.HTTPSConnection('127.0.0.1', 8080, timeout=10, context=ctx)
+        else:
+            conn = http.client.HTTPConnection('127.0.0.1', 8080, timeout=10)
+        conn.request('GET', '/healthz')
+        resp = conn.getresponse()
+        body = resp.read().decode()
+        print(f'status={resp.status}')
+        print(f'body={body}')
+        conn.close()
+        "
+      register: healthz_result
+      changed_when: false
+      retries: 6
+      delay: 10
+      until: "'status=200' in healthz_result.stdout"
+
+    - name: 19 Assert healthz returned 200
+      ansible.builtin.assert:
+        that:
+          - "'status=200' in healthz_result.stdout"
+        fail_msg: "Healthz endpoint did not return 200: {{ healthz_result.stdout }}"
+
+    - name: 19 Test liveness probe endpoint /
+      ansible.builtin.shell: |
+        oc exec {{ instanceha_pod_name }} -n openstack -- python3 -c "
+        import http.client, ssl, os
+        tls = os.path.exists(os.environ.get('METRICS_TLS_CERT', ''))
+        if tls:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            conn = http.client.HTTPSConnection('127.0.0.1', 8080, timeout=10, context=ctx)
+        else:
+            conn = http.client.HTTPConnection('127.0.0.1', 8080, timeout=10)
+        conn.request('GET', '/')
+        resp = conn.getresponse()
+        body = resp.read().decode()
+        print(f'status={resp.status}')
+        print(f'body={body}')
+        conn.close()
+        "
+      register: liveness_result
+      changed_when: false
+
+    - name: 19 Assert liveness endpoint returned 200
+      ansible.builtin.assert:
+        that:
+          - "'status=200' in liveness_result.stdout"
+        fail_msg: "Liveness endpoint did not return 200: {{ liveness_result.stdout }}"
+
+    - name: 19 Verify pod readiness condition
+      ansible.builtin.shell: |
+        oc get pod {{ instanceha_pod_name }} -n openstack -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: readiness_status
+      changed_when: false
+
+    - name: 19 Assert pod is Ready
+      ansible.builtin.assert:
+        that:
+          - readiness_status.stdout == "True"
+        fail_msg: "InstanceHA pod is not Ready (status={{ readiness_status.stdout }})"
+
+    - name: 19 Verify container readiness
+      ansible.builtin.shell: |
+        oc get pod {{ instanceha_pod_name }} -n openstack -o jsonpath='{.status.containerStatuses[0].ready}'
+      register: container_ready
+      changed_when: false
+
+    - name: 19 Assert container is ready
+      ansible.builtin.assert:
+        that:
+          - container_ready.stdout == "true"
+        fail_msg: "InstanceHA container is not ready (status={{ container_ready.stdout }})"
+
+    - name: 19 Print health check results summary
+      ansible.builtin.debug:
+        msg: |
+          Health Check Summary:
+            /healthz: {{ healthz_result.stdout_lines | select('search', 'status=') | first }}
+            /: {{ liveness_result.stdout_lines | select('search', 'status=') | first }}
+            Pod Ready: {{ readiness_status.stdout }}
+            Container Ready: {{ container_ready.stdout }}
+
+    - name: 19 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 19 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

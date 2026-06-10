@@ -60,6 +60,14 @@
       ansible.builtin.set_fact:
         compute2: "compute-{{ string }}-2.ctlplane.example.com"
 
+    - name: 09 Set compute-3 name as fact
+      ansible.builtin.set_fact:
+        compute3: "compute-{{ string }}-3.ctlplane.example.com"
+
+    - name: 09 Set compute-4 name as fact
+      ansible.builtin.set_fact:
+        compute4: "compute-{{ string }}-4.ctlplane.example.com"
+
     - name: 09 Set iha config
       ansible.builtin.template:
         src: templates/iha-cm.yaml.j2

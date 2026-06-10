@@ -1,0 +1,475 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+# This test verifies heartbeat-based host filtering using the proper EDPM
+# workflow. A MetalLB LoadBalancer Service (172.17.0.81) fronts the InstanceHA
+# leader pod's UDP ports. The edpm_instanceha_monitoring role deploys the
+# heartbeat sender on all compute nodes via an OpenStackDataPlaneDeployment.
+# When CHECK_HEARTBEAT is enabled and a compute node's nova-compute goes down
+# but the host OS is still alive (heartbeat packets still arriving),
+# InstanceHA skips fencing and does NOT evacuate VMs.
+
+- name: 23 Pre-cleanup (idempotent re-run)
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  tasks:
+    - name: 23 Pre-cleanup - Remove leftover VM
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-heartbeat
+      ignore_errors: true
+
+    - name: 23 Pre-cleanup - Remove leftover LoadBalancer Service
+      kubernetes.core.k8s:
+        state: absent
+        kind: Service
+        namespace: openstack
+        name: instanceha-udp
+      ignore_errors: true
+
+    - name: 23 Pre-cleanup - Remove leftover EDPM deployments
+      ansible.builtin.shell: |
+        oc -n openstack delete openstackdataplanedeployment instanceha-heartbeat-enable 2>/dev/null || true
+        oc -n openstack delete openstackdataplanedeployment instanceha-heartbeat-disable 2>/dev/null || true
+      changed_when: false
+      ignore_errors: true
+
+    - name: 23 Pre-cleanup - Remove leftover EDPM service
+      kubernetes.core.k8s:
+        state: absent
+        api_version: dataplane.openstack.org/v1beta1
+        kind: OpenStackDataPlaneService
+        namespace: openstack
+        name: instanceha-monitoring
+      ignore_errors: true
+
+- name: 23 Configure heartbeat test
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "23-test-heartbeat"
+
+  pre_tasks:
+    - name: 23 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 23 Set compute hostnames
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+    - name: 23 Set short compute-0 name (for SSH validation)
+      ansible.builtin.set_fact:
+        compute0_short: "{{ compute_zero_hostname | regex_replace('\\..*$', '') }}"
+
+    - name: 23 Discover OpenStackDataPlaneNodeSet name
+      ansible.builtin.shell: |
+        oc get openstackdataplanenodeset -n openstack -o jsonpath='{.items[0].metadata.name}'
+      register: nodeset_result
+      changed_when: false
+
+    - name: 23 Set nodeset name as fact
+      ansible.builtin.set_fact:
+        nodeset_name: "{{ nodeset_result.stdout | trim }}"
+
+    - name: 23 Fail if no nodeset found
+      ansible.builtin.fail:
+        msg: "No OpenStackDataPlaneNodeSet found in openstack namespace"
+      when: nodeset_name == ""
+
+  tasks:
+    - name: 23 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 23 Render InstanceHa CR from template (ensure no stale networkAttachments)
+      ansible.builtin.template:
+        src: templates/iha.yaml.j2
+        dest: /home/zuul/iha.yaml
+
+    - name: 23 Apply InstanceHa CR
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha.yaml
+      changed_when: false
+
+    - name: 23 Enable CHECK_HEARTBEAT with short timeout for testing
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        check_heartbeat: "true"
+        heartbeat_timeout: "60"
+
+    - name: 23 Apply heartbeat config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 23 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    # ── Create MetalLB LoadBalancer Service targeting the leader pod ──
+
+    - name: 23 Create MetalLB LoadBalancer Service for InstanceHA UDP ports
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: instanceha-udp
+            namespace: openstack
+            annotations:
+              metallb.universe.tf/address-pool: internalapi
+              metallb.universe.tf/allow-shared-ip: internalapi
+              metallb.universe.tf/loadBalancerIPs: 172.17.0.81
+          spec:
+            type: LoadBalancer
+            externalTrafficPolicy: Local
+            selector:
+              service: instanceha-0
+              instanceha.openstack.org/leader: "true"
+            ports:
+            - name: kdump
+              port: 7410
+              targetPort: 7410
+              protocol: UDP
+            - name: heartbeat
+              port: 7411
+              targetPort: 7411
+              protocol: UDP
+
+    - name: 23 Wait for LoadBalancer IP to be assigned
+      ansible.builtin.shell: |
+        oc -n openstack get svc instanceha-udp -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+      register: lb_ip_result
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: lb_ip_result.stdout == "172.17.0.81"
+
+    - name: 23 Set loadbalancer IP as fact
+      ansible.builtin.set_fact:
+        lb_ip: "{{ lb_ip_result.stdout }}"
+
+    # ── Deploy heartbeat sender via EDPM workflow ──
+
+    - name: 23 Create OpenStackDataPlaneService for instanceha-monitoring
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: dataplane.openstack.org/v1beta1
+          kind: OpenStackDataPlaneService
+          metadata:
+            name: instanceha-monitoring
+            namespace: openstack
+          spec:
+            dataSources:
+              - secretRef:
+                  name: instanceha-0-heartbeat-hmac
+            playbook: osp.edpm.instanceha_monitoring
+            edpmServiceType: instanceha-monitoring
+
+    - name: 23 Create OpenStackDataPlaneDeployment to enable heartbeat sender
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: dataplane.openstack.org/v1beta1
+          kind: OpenStackDataPlaneDeployment
+          metadata:
+            name: instanceha-heartbeat-enable
+            namespace: openstack
+          spec:
+            nodeSets:
+              - "{{ nodeset_name }}"
+            servicesOverride:
+              - instanceha-monitoring
+            ansibleExtraVars:
+              edpm_instanceha_monitoring_heartbeat_enabled: true
+              edpm_instanceha_monitoring_heartbeat_ip: "{{ lb_ip }}"
+              edpm_instanceha_monitoring_heartbeat_port: 7411
+              edpm_instanceha_monitoring_heartbeat_interval: 5
+
+    - name: 23 Wait for EDPM heartbeat deployment to complete
+      ansible.builtin.shell: |
+        oc wait openstackdataplanedeployment/instanceha-heartbeat-enable -n openstack --for condition=Ready --timeout=600s
+      changed_when: false
+
+    - name: 23 Verify heartbeat sender is running on compute-0
+      ansible.builtin.shell: |
+        ssh root@{{ compute0_short }} "systemctl is-active instanceha-heartbeat.timer"
+      register: timer_status
+      changed_when: false
+
+    - name: 23 Assert heartbeat timer is active
+      ansible.builtin.assert:
+        that:
+          - timer_status.stdout == "active"
+        fail_msg: "Heartbeat timer not active on compute-0: {{ timer_status.stdout }}"
+
+    - name: 23 Wait for heartbeat grace period to pass (HEARTBEAT_TIMEOUT + buffer)
+      ansible.builtin.pause:
+        seconds: 75
+
+    - name: 23 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_zero_hostname }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 23 Create instance on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_zero_hostname }}"
+        name: vm-heartbeat
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 23 Stop nova-compute on compute-0 (host stays alive, only service crashes)
+      ansible.builtin.shell: |
+        ssh root@{{ compute0_short }} "systemctl stop edpm_nova_compute.service"
+      changed_when: false
+
+    - name: 23 Wait for compute-0 nova-compute to be reported as down
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: svc_status
+      until: "'down' in svc_status.compute_services | map(attribute='state')"
+      retries: 24
+      delay: 10
+
+    - name: 23 Wait for IHA to detect down host and check heartbeat
+      ansible.builtin.pause:
+        seconds: 60
+
+    - name: 23 Get instanceha leader pod
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: openstack
+        label_selectors:
+          - instanceha.openstack.org/leader=true
+      register: pod_list
+
+    - name: 23 Set instanceha leader pod name
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_list.resources | map(attribute='metadata.name') | first | default('', true) }}"
+
+    - name: 23 Verify heartbeat filtering log message
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 200
+        all_containers: true
+      register: instanceha_logs
+      retries: 30
+      delay: 10
+      until: "'skipping fencing' in instanceha_logs.log and 'heartbeat received' in instanceha_logs.log"
+
+    - name: 23 Assert heartbeat-based skip message found
+      ansible.builtin.assert:
+        that:
+          - "'skipping fencing' in instanceha_logs.log"
+          - "'heartbeat received' in instanceha_logs.log"
+          - "'nova-compute crash' in instanceha_logs.log or 'likely nova-compute crash' in instanceha_logs.log"
+        fail_msg: "No heartbeat-based fencing skip message found in logs (LoadBalancer IP {{ lb_ip }})"
+
+    - name: 23 Verify VM was NOT evacuated
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-heartbeat
+      register: vm_info
+
+    - name: 23 Assert VM is still on compute-0
+      ansible.builtin.assert:
+        that:
+          - vm_info.servers[0].hypervisor_hostname == compute_zero_hostname
+        fail_msg: "vm-heartbeat was evacuated despite heartbeat being received (found on {{ vm_info.servers[0].hypervisor_hostname }})"
+        success_msg: "PASSED — vm-heartbeat stayed on compute-0 via LoadBalancer IP heartbeat"
+
+    - name: 23 Check for HostReachable K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=HostReachable --no-headers 2>/dev/null | grep -c 'HostReachable' || echo 0
+      register: reachable_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: reachable_events.stdout | int > 0
+
+    - name: 23 Verify HostReachable event was emitted
+      ansible.builtin.debug:
+        msg: "Found {{ reachable_events.stdout }} HostReachable events"
+
+    - name: 23 Restart nova-compute on compute-0
+      ansible.builtin.shell: |
+        ssh root@{{ compute0_short }} "systemctl start edpm_nova_compute.service"
+      changed_when: false
+
+    - name: 23 Wait for compute-0 to come back up
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: svc_status
+      until: "'up' in svc_status.compute_services | map(attribute='state')"
+      retries: 24
+      delay: 10
+
+    - name: 23 Wait for compute-0 to be enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: svc_status
+      until: "'enabled' in svc_status.compute_services | map(attribute='status')"
+      retries: 60
+      delay: 10
+
+    - name: 23 Save logs
+      ansible.builtin.shell: oc -n openstack logs $(oc get pods -n openstack -l instanceha.openstack.org/leader=true -o jsonpath='{.items[0].metadata.name}') > /home/zuul/23_heartbeat.log
+      changed_when: false
+
+- name: 23 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "23-test-heartbeat"
+
+  pre_tasks:
+    - name: 23 Discover OpenStackDataPlaneNodeSet name
+      ansible.builtin.shell: |
+        oc get openstackdataplanenodeset -n openstack -o jsonpath='{.items[0].metadata.name}'
+      register: nodeset_result
+      changed_when: false
+
+    - name: 23 Set nodeset name as fact
+      ansible.builtin.set_fact:
+        nodeset_name: "{{ nodeset_result.stdout | trim }}"
+
+  tasks:
+    - name: 23 Remove test VM
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-heartbeat
+
+    # ── Disable heartbeat sender via EDPM workflow ──
+
+    - name: 23 Remove enable deployment before creating disable deployment
+      ansible.builtin.shell: |
+        oc -n openstack delete openstackdataplanedeployment instanceha-heartbeat-enable 2>/dev/null || true
+      changed_when: false
+
+    - name: 23 Create OpenStackDataPlaneDeployment to disable heartbeat sender
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: dataplane.openstack.org/v1beta1
+          kind: OpenStackDataPlaneDeployment
+          metadata:
+            name: instanceha-heartbeat-disable
+            namespace: openstack
+          spec:
+            nodeSets:
+              - "{{ nodeset_name }}"
+            servicesOverride:
+              - instanceha-monitoring
+            ansibleExtraVars:
+              edpm_instanceha_monitoring_heartbeat_enabled: false
+
+    - name: 23 Wait for EDPM heartbeat disable deployment to complete
+      ansible.builtin.shell: |
+        oc wait openstackdataplanedeployment/instanceha-heartbeat-disable -n openstack --for condition=Ready --timeout=600s
+      changed_when: false
+
+    # ── Clean up K8s resources ──
+
+    - name: 23 Remove EDPM deployments
+      ansible.builtin.shell: |
+        oc -n openstack delete openstackdataplanedeployment instanceha-heartbeat-disable 2>/dev/null || true
+      changed_when: false
+
+    - name: 23 Remove OpenStackDataPlaneService
+      kubernetes.core.k8s:
+        state: absent
+        api_version: dataplane.openstack.org/v1beta1
+        kind: OpenStackDataPlaneService
+        namespace: openstack
+        name: instanceha-monitoring
+
+    - name: 23 Remove MetalLB LoadBalancer Service
+      kubernetes.core.k8s:
+        state: absent
+        kind: Service
+        namespace: openstack
+        name: instanceha-udp
+
+    - name: 23 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 23 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 23 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 23 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 23 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

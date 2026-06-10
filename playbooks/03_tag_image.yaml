@@ -14,6 +14,29 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+- name: 03 Pre-cleanup (idempotent re-run)
+  hosts: controller-0
+  gather_facts: false
+  tasks:
+    - name: 03 Pre-cleanup - Remove leftover VMs
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: "{{ item }}"
+      loop:
+        - vm
+        - vm-ha
+      ignore_errors: true
+
+    - name: 03 Pre-cleanup - Remove leftover image
+      openstack.cloud.image:
+        cloud: default
+        state: absent
+        name: cirros-ha
+      ignore_errors: true
+
 - name: 03 TEST TAG IMAGE
   hosts: controller-0
   gather_facts: false
@@ -54,6 +77,18 @@
     - name: 03 Set compute-1 name as fact
       ansible.builtin.set_fact:
         compute1: "compute-{{ string }}-1.ctlplane.example.com"
+
+    - name: 03 Set compute-2 name as fact
+      ansible.builtin.set_fact:
+        compute2: "compute-{{ string }}-2.ctlplane.example.com"
+
+    - name: 03 Set compute-3 name as fact
+      ansible.builtin.set_fact:
+        compute3: "compute-{{ string }}-3.ctlplane.example.com"
+
+    - name: 03 Set compute-4 name as fact
+      ansible.builtin.set_fact:
+        compute4: "compute-{{ string }}-4.ctlplane.example.com"
 
     - name: 03 Create tagged image
       openstack.cloud.image:

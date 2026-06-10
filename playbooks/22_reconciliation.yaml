@@ -1,0 +1,369 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 22 Pre-cleanup (idempotent re-run)
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+  tasks:
+    - name: 22 Pre-cleanup - Remove leftover VM
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-reconcile
+      ignore_errors: true
+
+- name: 22 Test startup reconciliation of orphaned fenced hosts
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "22-test-reconciliation"
+
+  pre_tasks:
+    - name: 22 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 22 Set dynamic compute node names using parsed compute details
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+    - name: 22 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 22 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 22 Enable smart evacuation
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        smart_evacuation: "true"
+
+    - name: 22 Apply config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 22 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 22 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_zero_hostname }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 22 Create instance on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_zero_hostname }}"
+        name: vm-reconcile
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 22 Delete InstanceHa CR to stop instanceha pod
+      kubernetes.core.k8s:
+        state: absent
+        namespace: openstack
+        api_version: instanceha.openstack.org/v1beta1
+        kind: InstanceHa
+        name: instanceha-0
+        wait: true
+        wait_timeout: 120
+
+    - name: 22 Wait for instanceha pod to be fully terminated
+      ansible.builtin.shell: |
+        oc get pods -n openstack --no-headers 2>/dev/null | grep -c instanceha || echo 0
+      register: pod_count
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: pod_count.stdout | int == 0
+
+- name: 22 Crash compute-0 (with IHA not running)
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 22 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 22 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 22 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 22 Simulate orphaned fenced host state
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 22 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 22 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 22 Wait for compute-0 nova-compute service to go down
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: svc_status
+      until: "'down' in svc_status.compute_services | map(attribute='state')"
+      retries: 24
+      delay: 10
+
+    - name: 22 Set compute-0 as forced_down (simulating IHA fenced it before crashing)
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service set --down "{{ compute_zero_hostname }}" nova-compute
+      changed_when: false
+
+    - name: 22 Verify orphaned state - forced_down=true, state=down, status=enabled
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service list -f json --host "{{ compute_zero_hostname }}" --service nova-compute
+      register: svc_json
+      changed_when: false
+
+    - name: 22 Parse service state
+      ansible.builtin.set_fact:
+        svc_info: "{{ svc_json.stdout | from_json | first }}"
+
+    - name: 22 Assert orphaned state is correct
+      ansible.builtin.assert:
+        that:
+          - svc_info.Status == "enabled"
+          - svc_info.State == "down"
+        fail_msg: "compute-0 is not in expected orphaned state (Status={{ svc_info.Status }}, State={{ svc_info.State }})"
+        success_msg: "compute-0 is in orphaned state: forced_down=True, state=down, status=enabled (NOT disabled)"
+
+    - name: 22 Recreate InstanceHa CR to start a fresh pod
+      kubernetes.core.k8s:
+        state: present
+        namespace: openstack
+        src: /home/zuul/iha.yaml
+
+    - name: 22 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 22 Wait for instanceha pod to be running
+      ansible.builtin.shell: |
+        oc get pods -n openstack --no-headers 2>/dev/null | grep instanceha | grep Running | wc -l
+      register: running_pods
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: running_pods.stdout | int > 0
+
+    - name: 22 List pods in the openstack namespace
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: openstack
+      register: pod_list
+
+    - name: 22 Filter for instanceha pod
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_list.resources | map(attribute='metadata.name') | select('search', 'instanceha') | list | first | default('', true) }}"
+
+    - name: 22 Wait for reconciliation log message
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 100
+        all_containers: true
+      register: instanceha_logs
+      retries: 30
+      delay: 10
+      until: "'Recovered orphaned fenced host' in instanceha_logs.log"
+
+    - name: 22 Assert reconciliation message found
+      ansible.builtin.assert:
+        that:
+          - "'Recovered orphaned fenced host' in instanceha_logs.log"
+        fail_msg: "No 'Recovered orphaned fenced host' message — reconciliation did not detect orphaned host"
+
+    - name: 22 Verify startup reconciliation summary
+      ansible.builtin.assert:
+        that:
+          - "'Startup reconciliation' in instanceha_logs.log or 'recovered' in instanceha_logs.log"
+        fail_msg: "No startup reconciliation summary found in logs"
+
+    - name: 22 Check for OrphanedHostRecovered K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=OrphanedHostRecovered --no-headers 2>/dev/null | grep -c 'OrphanedHostRecovered' || echo 0
+      register: reconcile_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: reconcile_events.stdout | int > 0
+
+    - name: 22 Verify OrphanedHostRecovered event was emitted
+      ansible.builtin.debug:
+        msg: "Found {{ reconcile_events.stdout }} OrphanedHostRecovered events"
+
+    - name: 22 Wait for VM to be evacuated (resume logic picks up the marked host)
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-reconcile
+      register: vm_status
+      until: vm_status.servers[0].status == "ACTIVE" and vm_status.servers[0].hypervisor_hostname != compute_zero_hostname
+      retries: 60
+      delay: 10
+
+    - name: 22 Assert VM was evacuated to another host
+      ansible.builtin.assert:
+        that:
+          - vm_status.servers[0].status == "ACTIVE"
+          - vm_status.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: "vm-reconcile was not evacuated after reconciliation (host={{ vm_status.servers[0].hypervisor_hostname }}, status={{ vm_status.servers[0].status }})"
+        success_msg: "vm-reconcile was successfully evacuated after startup reconciliation"
+
+    - name: 22 Verify IHA powered on compute-0 after evacuation
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 200
+        all_containers: true
+      register: power_on_logs
+      retries: 12
+      delay: 10
+      until: "'Fencing host ' + compute_zero_hostname + ' on' in power_on_logs.log"
+
+    - name: 22 Assert power-on fencing was performed
+      ansible.builtin.assert:
+        that:
+          - "'Fencing host ' + compute_zero_hostname + ' on' in power_on_logs.log"
+        fail_msg: "IHA did not power on compute-0 after resume evacuation"
+        success_msg: "IHA correctly powered on compute-0 after resume evacuation"
+
+    - name: 22 Wait for compute-0 to transition to up (IHA powers it on after evacuation)
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: svc_status
+      until: "'up' in svc_status.compute_services | map(attribute='state')"
+      retries: 24
+      delay: 10
+
+    - name: 22 Save logs
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/22_reconciliation.log
+      changed_when: false
+
+- name: 22 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "22-test-reconciliation"
+
+  pre_tasks:
+    - name: 22 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 22 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 22 Remove test VM
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-reconcile
+
+    - name: 22 Wait for IHA to re-enable compute-0 (automatic after power-on and host up)
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: compute_0_status
+      until: "'enabled' in compute_0_status.compute_services | map(attribute='status') and 'up' in compute_0_status.compute_services | map(attribute='state')"
+      retries: 60
+      delay: 10
+
+    - name: 22 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 22 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 22 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 22 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 22 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

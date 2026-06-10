@@ -1,0 +1,537 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 25 Test Prometheus metrics via telemetry-operator integration
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "25-test-prometheus-metrics"
+    prometheus_svc: metric-storage-prometheus.openstack.svc
+    prometheus_port: 9090
+
+  pre_tasks:
+    - name: 25 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 25 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 25 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 25 Enable smart evacuation
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        smart_evacuation: "true"
+
+    - name: 25 Apply config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 25 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 25 Wait for config reload
+      ansible.builtin.pause:
+        minutes: 1
+
+    - name: 25 Verify ScrapeConfig telemetry-instanceha exists
+      ansible.builtin.shell: |
+        oc get scrapeconfig -n openstack telemetry-instanceha -o jsonpath='{.metadata.name}'
+      register: scrapeconfig_result
+      changed_when: false
+
+    - name: 25 Assert ScrapeConfig is present
+      ansible.builtin.assert:
+        that:
+          - scrapeconfig_result.rc == 0
+          - "'telemetry-instanceha' in scrapeconfig_result.stdout"
+        fail_msg: "ScrapeConfig telemetry-instanceha not found. Is telemetry-operator deployed with MetricStorage?"
+
+    - name: 25 Show ScrapeConfig details
+      ansible.builtin.shell: |
+        oc get scrapeconfig -n openstack telemetry-instanceha -o yaml
+      register: scrapeconfig_yaml
+      changed_when: false
+
+    - name: 25 Display ScrapeConfig
+      ansible.builtin.debug:
+        var: scrapeconfig_yaml.stdout
+
+    - name: 25 Get instanceha pod name
+      ansible.builtin.shell: |
+        oc get pods -n openstack -l service=instanceha-0 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
+        oc get pods -n openstack -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep instanceha | head -1
+      register: pod_name_result
+      changed_when: false
+
+    - name: 25 Set instanceha pod name
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_name_result.stdout | trim }}"
+
+    - name: 25 Fail if no instanceha pod found
+      ansible.builtin.fail:
+        msg: "No instanceha pod found"
+      when: instanceha_pod_name == ""
+
+    - name: 25 Wait for instanceha metrics in prometheus-metric-storage
+      ansible.builtin.shell: |
+        oc exec {{ instanceha_pod_name }} -n openstack -- python3 -c "
+        import http.client, json, ssl, urllib.parse
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        conn = http.client.HTTPSConnection('{{ prometheus_svc }}', {{ prometheus_port }}, timeout=10, context=ctx)
+        query = urllib.parse.urlencode({'query': 'instanceha_poll_cycles_total'})
+        conn.request('GET', '/api/v1/query?' + query)
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode())
+        conn.close()
+        results = data.get('data', {}).get('result', [])
+        if not results:
+            exit(1)
+        print('Metrics found in prometheus-metric-storage')
+        "
+      register: prom_discovery
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: prom_discovery.rc == 0
+
+    - name: 25 Query baseline metrics from prometheus-metric-storage
+      ansible.builtin.shell: |
+        oc exec {{ instanceha_pod_name }} -n openstack -- python3 -c "
+        import http.client, json, ssl, urllib.parse
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        KEEP = {'host', 'result', 'aggregate', 'le'}
+        conn = http.client.HTTPSConnection('{{ prometheus_svc }}', {{ prometheus_port }}, timeout=10, context=ctx)
+        query = urllib.parse.urlencode({'query': '{__name__=~\"instanceha_.*\"}'})
+        conn.request('GET', '/api/v1/query?' + query)
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode())
+        conn.close()
+        DQ = chr(34)
+        for r in data.get('data', {}).get('result', []):
+            m = r['metric']
+            name = m['__name__']
+            labels = ','.join(k + '=' + DQ + v + DQ for k, v in sorted(m.items()) if k in KEEP)
+            value = str(float(r['value'][1]))
+            if labels:
+                print(name + '{' + labels + '} ' + value)
+            else:
+                print(name + ' ' + value)
+        "
+      register: baseline_metrics
+      changed_when: false
+      retries: 6
+      delay: 10
+      until: baseline_metrics.rc == 0
+
+    - name: 25 Assert prometheus-metric-storage is serving instanceha metrics
+      ansible.builtin.assert:
+        that:
+          - "'instanceha_poll_cycles_total' in baseline_metrics.stdout"
+        fail_msg: "prometheus-metric-storage is not serving instanceha metrics"
+
+    - name: 25 Parse baseline counter values
+      ansible.builtin.set_fact:
+        baseline_host_down: "{{ baseline_metrics.stdout | regex_search('instanceha_host_down_total\\{[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_fencing_started: "{{ baseline_metrics.stdout | regex_search('instanceha_fencing_total\\{[^}]*result=\"started\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_fencing_succeeded: "{{ baseline_metrics.stdout | regex_search('instanceha_fencing_total\\{[^}]*result=\"succeeded\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_evac_started: "{{ baseline_metrics.stdout | regex_search('instanceha_evacuation_total\\{[^}]*result=\"started\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_evac_succeeded: "{{ baseline_metrics.stdout | regex_search('instanceha_evacuation_total\\{[^}]*result=\"succeeded\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_instance_evac_started: "{{ baseline_metrics.stdout | regex_search('instanceha_instance_evacuation_total\\{[^}]*result=\"started\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_instance_evac_succeeded: "{{ baseline_metrics.stdout | regex_search('instanceha_instance_evacuation_total\\{[^}]*result=\"succeeded\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_host_reenabled: "{{ baseline_metrics.stdout | regex_search('instanceha_host_reenabled_total\\{[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        baseline_recovery_completed: "{{ baseline_metrics.stdout | regex_search('instanceha_recovery_completed_total\\{[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+
+    - name: 25 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 25 Create instance on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        availability_zone: nova:{{ compute_zero_hostname }}
+        state: present
+        name: vm-metrics
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+- name: 25 Crash compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 25 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 25 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 25 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 25 Verify Prometheus metrics in prometheus-metric-storage after evacuation
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "25-test-prometheus-metrics"
+    prometheus_svc: metric-storage-prometheus.openstack.svc
+    prometheus_port: 9090
+
+  pre_tasks:
+    - name: 25 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 25 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 25 Wait for compute-0 to transition to down
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 12
+      delay: 10
+
+    - name: 25 Get instanceha pod name
+      ansible.builtin.shell: |
+        oc get pods -n openstack -l service=instanceha-0 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
+        oc get pods -n openstack -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep instanceha | head -1
+      register: pod_name_result
+      changed_when: false
+
+    - name: 25 Set instanceha pod name
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_name_result.stdout | trim }}"
+
+    - name: 25 Wait for VM to be evacuated from compute-0
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-metrics
+      register: vm_info
+      retries: 60
+      delay: 10
+      until:
+        - vm_info.servers | length > 0
+        - vm_info.servers[0].status == "ACTIVE"
+        - vm_info.servers[0].hypervisor_hostname != compute_zero_hostname
+
+    - name: 25 Assert VM was evacuated and is ACTIVE
+      ansible.builtin.assert:
+        that:
+          - vm_info.servers[0].status == "ACTIVE"
+          - vm_info.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: >
+          VM not properly evacuated.
+          Status={{ vm_info.servers[0].status }}, host={{ vm_info.servers[0].hypervisor_hostname }}
+
+    - name: 25 Wait for compute-0 to be up and enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: compute_0_status
+      until:
+        - "'up' in compute_0_status.compute_services | map(attribute='state')"
+        - "'enabled' in compute_0_status.compute_services | map(attribute='status')"
+      retries: 60
+      delay: 10
+
+    - name: 25 Reload baseline values from first play
+      ansible.builtin.set_fact:
+        baseline_host_down: "{{ hostvars['controller-0']['baseline_host_down'] | default(0) | float }}"
+        baseline_fencing_started: "{{ hostvars['controller-0']['baseline_fencing_started'] | default(0) | float }}"
+        baseline_fencing_succeeded: "{{ hostvars['controller-0']['baseline_fencing_succeeded'] | default(0) | float }}"
+        baseline_evac_started: "{{ hostvars['controller-0']['baseline_evac_started'] | default(0) | float }}"
+        baseline_evac_succeeded: "{{ hostvars['controller-0']['baseline_evac_succeeded'] | default(0) | float }}"
+        baseline_instance_evac_started: "{{ hostvars['controller-0']['baseline_instance_evac_started'] | default(0) | float }}"
+        baseline_instance_evac_succeeded: "{{ hostvars['controller-0']['baseline_instance_evac_succeeded'] | default(0) | float }}"
+        baseline_host_reenabled: "{{ hostvars['controller-0']['baseline_host_reenabled'] | default(0) | float }}"
+        baseline_recovery_completed: "{{ hostvars['controller-0']['baseline_recovery_completed'] | default(0) | float }}"
+
+    - name: 25 Wait for post-evacuation metrics to propagate to prometheus-metric-storage
+      ansible.builtin.shell: |
+        oc exec {{ instanceha_pod_name }} -n openstack -- python3 -c "
+        import http.client, json, ssl, urllib.parse
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        conn = http.client.HTTPSConnection('{{ prometheus_svc }}', {{ prometheus_port }}, timeout=10, context=ctx)
+        query = urllib.parse.urlencode({'query': 'sum(instanceha_host_reenabled_total)'})
+        conn.request('GET', '/api/v1/query?' + query)
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode())
+        conn.close()
+        results = data.get('data', {}).get('result', [])
+        if not results:
+            exit(1)
+        value = float(results[0]['value'][1])
+        if value <= {{ baseline_host_reenabled }}:
+            exit(1)
+        print('host_reenabled incremented to ' + str(value))
+        "
+      register: prom_reenabled_wait
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: prom_reenabled_wait.rc == 0
+
+    - name: 25 Query post-evacuation metrics from prometheus-metric-storage
+      ansible.builtin.shell: |
+        oc exec {{ instanceha_pod_name }} -n openstack -- python3 -c "
+        import http.client, json, ssl, urllib.parse
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        KEEP = {'host', 'result', 'aggregate', 'le'}
+        conn = http.client.HTTPSConnection('{{ prometheus_svc }}', {{ prometheus_port }}, timeout=10, context=ctx)
+        query = urllib.parse.urlencode({'query': '{__name__=~\"instanceha_.*\"}'})
+        conn.request('GET', '/api/v1/query?' + query)
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode())
+        conn.close()
+        DQ = chr(34)
+        for r in data.get('data', {}).get('result', []):
+            m = r['metric']
+            name = m['__name__']
+            labels = ','.join(k + '=' + DQ + v + DQ for k, v in sorted(m.items()) if k in KEEP)
+            value = str(float(r['value'][1]))
+            if labels:
+                print(name + '{' + labels + '} ' + value)
+            else:
+                print(name + ' ' + value)
+        "
+      register: post_metrics
+      changed_when: false
+
+    - name: 25 Parse post-evacuation counter values
+      ansible.builtin.set_fact:
+        post_host_down: "{{ post_metrics.stdout | regex_search('instanceha_host_down_total\\{[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_fencing_started: "{{ post_metrics.stdout | regex_search('instanceha_fencing_total\\{[^}]*result=\"started\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_fencing_succeeded: "{{ post_metrics.stdout | regex_search('instanceha_fencing_total\\{[^}]*result=\"succeeded\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_evac_started: "{{ post_metrics.stdout | regex_search('instanceha_evacuation_total\\{[^}]*result=\"started\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_evac_succeeded: "{{ post_metrics.stdout | regex_search('instanceha_evacuation_total\\{[^}]*result=\"succeeded\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_instance_evac_started: "{{ post_metrics.stdout | regex_search('instanceha_instance_evacuation_total\\{[^}]*result=\"started\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_instance_evac_succeeded: "{{ post_metrics.stdout | regex_search('instanceha_instance_evacuation_total\\{[^}]*result=\"succeeded\"[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_host_reenabled: "{{ post_metrics.stdout | regex_search('instanceha_host_reenabled_total\\{[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_recovery_completed: "{{ post_metrics.stdout | regex_search('instanceha_recovery_completed_total\\{[^}]*\\}\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_consecutive_failures: "{{ post_metrics.stdout | regex_search('instanceha_poll_consecutive_failures\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        post_hosts_processing: "{{ post_metrics.stdout | regex_search('instanceha_hosts_processing\\s+([\\d.]+)', '\\1') | default(['0'], true) | first | float }}"
+        has_histogram: "{{ 'instanceha_instance_evacuation_duration_seconds_count' in post_metrics.stdout }}"
+
+    - name: 25 Assert instanceha_host_down_total incremented
+      ansible.builtin.assert:
+        that:
+          - (post_host_down | float) > (baseline_host_down | float)
+        fail_msg: >
+          instanceha_host_down_total did not increment.
+          Baseline={{ baseline_host_down }}, Post={{ post_host_down }}
+
+    - name: 25 Assert instanceha_fencing_total started incremented
+      ansible.builtin.assert:
+        that:
+          - (post_fencing_started | float) > (baseline_fencing_started | float)
+        fail_msg: >
+          instanceha_fencing_total{result="started"} did not increment.
+          Baseline={{ baseline_fencing_started }}, Post={{ post_fencing_started }}
+
+    - name: 25 Assert instanceha_fencing_total succeeded incremented
+      ansible.builtin.assert:
+        that:
+          - (post_fencing_succeeded | float) > (baseline_fencing_succeeded | float)
+        fail_msg: >
+          instanceha_fencing_total{result="succeeded"} did not increment.
+          Baseline={{ baseline_fencing_succeeded }}, Post={{ post_fencing_succeeded }}
+
+    - name: 25 Assert instanceha_evacuation_total started incremented
+      ansible.builtin.assert:
+        that:
+          - (post_evac_started | float) > (baseline_evac_started | float)
+        fail_msg: >
+          instanceha_evacuation_total{result="started"} did not increment.
+          Baseline={{ baseline_evac_started }}, Post={{ post_evac_started }}
+
+    - name: 25 Assert instanceha_evacuation_total succeeded incremented
+      ansible.builtin.assert:
+        that:
+          - (post_evac_succeeded | float) > (baseline_evac_succeeded | float)
+        fail_msg: >
+          instanceha_evacuation_total{result="succeeded"} did not increment.
+          Baseline={{ baseline_evac_succeeded }}, Post={{ post_evac_succeeded }}
+
+    - name: 25 Assert instanceha_instance_evacuation_total started incremented
+      ansible.builtin.assert:
+        that:
+          - (post_instance_evac_started | float) > (baseline_instance_evac_started | float)
+        fail_msg: >
+          instanceha_instance_evacuation_total{result="started"} did not increment.
+          Baseline={{ baseline_instance_evac_started }}, Post={{ post_instance_evac_started }}
+
+    - name: 25 Assert instanceha_instance_evacuation_total succeeded incremented
+      ansible.builtin.assert:
+        that:
+          - (post_instance_evac_succeeded | float) > (baseline_instance_evac_succeeded | float)
+        fail_msg: >
+          instanceha_instance_evacuation_total{result="succeeded"} did not increment.
+          Baseline={{ baseline_instance_evac_succeeded }}, Post={{ post_instance_evac_succeeded }}
+
+    - name: 25 Assert evacuation duration histogram has observations
+      ansible.builtin.assert:
+        that:
+          - has_histogram | bool
+        fail_msg: "instanceha_instance_evacuation_duration_seconds histogram has no observations in prometheus-metric-storage"
+
+    - name: 25 Assert instanceha_host_reenabled_total incremented
+      ansible.builtin.assert:
+        that:
+          - (post_host_reenabled | float) > (baseline_host_reenabled | float)
+        fail_msg: >
+          instanceha_host_reenabled_total did not increment.
+          Baseline={{ baseline_host_reenabled }}, Post={{ post_host_reenabled }}
+
+    - name: 25 Assert instanceha_recovery_completed_total incremented
+      ansible.builtin.assert:
+        that:
+          - (post_recovery_completed | float) > (baseline_recovery_completed | float)
+        fail_msg: >
+          instanceha_recovery_completed_total did not increment.
+          Baseline={{ baseline_recovery_completed }}, Post={{ post_recovery_completed }}
+
+    - name: 25 Assert consecutive failures gauge is zero
+      ansible.builtin.assert:
+        that:
+          - (post_consecutive_failures | float) == 0.0
+        fail_msg: >
+          instanceha_poll_consecutive_failures should be 0 after successful cycle.
+          Got={{ post_consecutive_failures }}
+
+    - name: 25 Assert hosts processing gauge is zero
+      ansible.builtin.assert:
+        that:
+          - (post_hosts_processing | float) == 0.0
+        fail_msg: >
+          instanceha_hosts_processing should be 0 after evacuation completes.
+          Got={{ post_hosts_processing }}
+
+    - name: 25 Print metrics comparison summary
+      ansible.builtin.debug:
+        msg: |
+          Prometheus Metrics Summary (baseline -> post) via prometheus-metric-storage:
+            host_down_total:                {{ baseline_host_down }} -> {{ post_host_down }}
+            fencing_total{started}:         {{ baseline_fencing_started }} -> {{ post_fencing_started }}
+            fencing_total{succeeded}:       {{ baseline_fencing_succeeded }} -> {{ post_fencing_succeeded }}
+            evacuation_total{started}:      {{ baseline_evac_started }} -> {{ post_evac_started }}
+            evacuation_total{succeeded}:    {{ baseline_evac_succeeded }} -> {{ post_evac_succeeded }}
+            instance_evac_total{started}:   {{ baseline_instance_evac_started }} -> {{ post_instance_evac_started }}
+            instance_evac_total{succeeded}: {{ baseline_instance_evac_succeeded }} -> {{ post_instance_evac_succeeded }}
+            host_reenabled_total:           {{ baseline_host_reenabled }} -> {{ post_host_reenabled }}
+            recovery_completed_total:       {{ baseline_recovery_completed }} -> {{ post_recovery_completed }}
+            poll_consecutive_failures:      {{ post_consecutive_failures }}
+            hosts_processing:               {{ post_hosts_processing }}
+            duration_histogram_present:     {{ has_histogram }}
+          Source: {{ prometheus_svc }}:{{ prometheus_port }}
+
+    - name: 25 Save logs
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/25_prometheus_metrics.log
+      changed_when: false
+
+- name: 25 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "25-test-prometheus-metrics"
+
+  tasks:
+    - name: 25 Remove test VM
+      openstack.cloud.server:
+        cloud: default
+        state: absent
+        name: vm-metrics
+      ignore_errors: true
+
+    - name: 25 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 25 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 25 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 25 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 25 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

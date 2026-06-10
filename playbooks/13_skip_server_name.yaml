@@ -14,125 +14,81 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-- name: 02 Pre-cleanup (idempotent re-run)
+- name: 13 Test SKIP_SERVERS_WITH_NAME
   hosts: controller-0
-  gather_facts: false
-  tasks:
-    - name: 02 Pre-cleanup - Remove leftover VMs
-      openstack.cloud.server:
-        cloud: default
-        auth:
-          project_name: admin
-        state: absent
-        name: "{{ item }}"
-      loop:
-        - vm
-        - vm-ha
-      ignore_errors: true
-
-    - name: 02 Pre-cleanup - Remove leftover flavor
-      openstack.cloud.compute_flavor:
-        cloud: default
-        state: absent
-        name: iha.nanoha
-      ignore_errors: true
-
-- name: 02 TEST TAG FLAVOR
-  hosts: controller-0
+  remote_user: zuul
   gather_facts: false
   vars:
-    name: "02-test-tagged-flavors-evacuation"
+    name: "13-test-skip-server-name"
   tasks:
-    - name: 02 Create results file (failure)
+    - name: 13 Create results file (failure)
       ansible.builtin.template:
         src: templates/iha-tests-results.xml.j2
         dest: /home/zuul/iha-tests-results/{{ name }}.xml
       vars:
         success: false
 
-    - name: Reset iha configmap
+    - name: 13 Update configmap with SKIP_SERVERS_WITH_NAME
       ansible.builtin.template:
         src: templates/iha-cm.yaml.j2
         dest: /home/zuul/iha-cm.yaml
+      vars:
+        skip_servers_with_name: "skip-me*, ignore-this*"
 
-    - name: Apply new config
+    - name: 13 Apply new config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
       changed_when: false
 
-    - name: 02 fetch random string
+    - name: 13 fetch random string
       ansible.builtin.shell:
         cmd: "cat ~/.ssh/config |grep 'Host compute' |awk '{print $2}' |head -1|cut -d- -f2"
       register: string
       changed_when: false
 
-    - name: 02 set string as fact
+    - name: 13 set string as fact
       ansible.builtin.set_fact:
         string: "{{ string.stdout }}"
 
-    - name: 02 Set compute-0 name as fact
+    - name: 13 Set compute-0 name as fact
       ansible.builtin.set_fact:
         compute0: "compute-{{ string }}-0.ctlplane.example.com"
 
-    - name: 02 Set compute-1 name as fact
+    - name: 13 Set compute-1 name as fact
       ansible.builtin.set_fact:
         compute1: "compute-{{ string }}-1.ctlplane.example.com"
 
-    - name: 02 Set compute-2 name as fact
+    - name: 13 Set compute-2 name as fact
       ansible.builtin.set_fact:
         compute2: "compute-{{ string }}-2.ctlplane.example.com"
 
-    - name: 02 Set compute-3 name as fact
+    - name: 13 Set compute-3 name as fact
       ansible.builtin.set_fact:
         compute3: "compute-{{ string }}-3.ctlplane.example.com"
 
-    - name: 02 Set compute-4 name as fact
+    - name: 13 Set compute-4 name as fact
       ansible.builtin.set_fact:
         compute4: "compute-{{ string }}-4.ctlplane.example.com"
 
-    - name: 02 Create tagged flavor
-      openstack.cloud.compute_flavor:
-        cloud: default
-        state: present
-        name: iha.nanoha
-        ram: 128
-        vcpus: 1
-        disk: 1
-        extra_specs:
-          "hw_rng:allowed": 'True'
-
-    - name: 02 set flavor trait
-      ansible.builtin.shell: |
-        openstack --os-cloud default flavor set --property trait:CUSTOM_HA=true iha.nanoha
-      changed_when: false
-
-    - name: 02 set resource provider trait
-      ansible.builtin.shell: |
-        openstack --os-cloud default trait create CUSTOM_HA
-        uuid=$(openstack --os-cloud default resource provider list -f value -c uuid |head -1)
-        existing_traits=$(openstack --os-cloud default resource provider trait list -f value $uuid | sed 's/^/--trait /')
-        for i in $(openstack --os-cloud default resource provider list -f value -c uuid); do openstack --os-cloud default resource provider trait set $existing_traits --trait CUSTOM_HA $i; done
-      changed_when: false
-
-    - name: 02 Wait for compute-0 resource provider to be available in placement
+    - name: 13 Wait for compute-0 resource provider to be available in placement
       ansible.builtin.shell: |
         rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ hostvars['controller-0']['compute0'] }}" | awk '{print $1}')
         traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 24
-      delay: 10
+      retries: 12
+      delay: 5
       changed_when: false
 
-    - name: 02 Create instance vm
+    - name: 13 Create instance vm-ha (should be evacuated)
       openstack.cloud.server:
         cloud: default
         auth:
           project_name: admin
         state: present
         availability_zone: "nova:{{ hostvars['controller-0']['compute0'] }}"
-        name: vm
+        name: vm-ha
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
         flavor: iha.nano
@@ -141,90 +97,115 @@
         nics:
           - net-name: ihanet
 
-    - name: 02 Create instance vm-ha
+    - name: 13 Create instance skip-me-vm (should NOT be evacuated)
       openstack.cloud.server:
         cloud: default
         auth:
           project_name: admin
         state: present
         availability_zone: "nova:{{ hostvars['controller-0']['compute0'] }}"
-        name: vm-ha
+        name: skip-me-vm
         image: cirros-0.6.2-iha-x86_64-disk.img
         timeout: 200
-        flavor: iha.nanoha
+        flavor: iha.nano
         security_groups:
           - ping
         nics:
           - net-name: ihanet
 
-- name: 02 Crash compute-0
-  hosts: hypervisor
-  remote_user: zuul
-  become: true
-  gather_facts: false
-  tasks:
-    - name: 02 Shutdown compute
-      community.libvirt.virt:
-        name: "cifmw-compute-{{ hostvars['controller-0']['string'] }}-0"
-        state: destroyed
-
-- name: 02 Check status
-  hosts: controller-0
-  gather_facts: false
-  vars:
-    name: "02-test-tagged-flavors-evacuation"
-  tasks:
-    - name: 02 Fetch HYPERVISOR for instance vm-ha
-      ansible.builtin.shell: |
-        openstack --os-cloud default server show vm-ha  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
-      register: hypervisor2
-      changed_when: false
-      retries: 180
-      delay: 10
-      until: "hypervisor2.stdout not in hostvars['controller-0']['compute0']"
-
-    - name: 02 Fetch hypervisor for instance vm
-      ansible.builtin.shell: |
-        openstack --os-cloud default server show vm  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
-      register: hypervisor_vm
-      changed_when: false
-
-    - name: 02 Check if vm was evacuated
-      ansible.builtin.fail:
-        msg: "vm evacuated, this should not happen"
-      when: hypervisor_vm.stdout not in hostvars['controller-0']['compute0']
-
-    - name: 02 Fetch hypervisor for instance vm-ha
-      ansible.builtin.shell: |
-        openstack --os-cloud default server show vm-ha  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
-      register: hypervisor_vm_ha
-      changed_when: false
-
-    - name: 02 Check if vm was evacuated
-      ansible.builtin.fail:
-        msg: "vm not evacuated"
-      when: hypervisor_vm_ha.stdout in hostvars['controller-0']['compute0']
-
-    - name: 02 Fetch vm-ha status
-      ansible.builtin.shell: |
-        openstack --os-cloud default server show vm-ha |grep vm_state |tail -1  |awk '{print $4}'
-      register: vm_ha_status
-      changed_when: false
-
-    - name: 02 Check vm-ha status
-      ansible.builtin.fail:
-        msg: "vm-ha should be active"
-      when: vm_ha_status.stdout != "active"
-
-    - name: 02 Remove vm
+    - name: 13 Create instance ignore-this-vm (should NOT be evacuated)
       openstack.cloud.server:
         cloud: default
         auth:
           project_name: admin
-        state: absent
-        name: vm
+        state: present
+        availability_zone: "nova:{{ hostvars['controller-0']['compute0'] }}"
+        name: ignore-this-vm
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
 
-    - name: 02 Remove vm-ha
+
+- name: 13 Crash compute-0
+
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: 13 Shutdown compute
+      community.libvirt.virt:
+        name: "cifmw-compute-{{ hostvars['controller-0']['string'] }}-0"
+        state: destroyed
+
+
+- name: 13 Check status
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+  vars:
+    name: "13-test-skip-server-name"
+
+  tasks:
+    - name: 13 Wait for vm-ha to be evacuated from compute-0
+      ansible.builtin.shell: |
+        openstack --os-cloud default server show vm-ha |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
+      register: hypervisor_vm_ha
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: "hypervisor_vm_ha.stdout not in hostvars['controller-0']['compute0']"
+
+    - name: 13 Fetch hypervisor for skip-me-vm
+      ansible.builtin.shell: |
+        openstack --os-cloud default server show skip-me-vm |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
+      register: hypervisor_skip_vm
+      changed_when: false
+
+    - name: 13 Check skip-me-vm was NOT evacuated
+      ansible.builtin.fail:
+        msg: "skip-me-vm was evacuated, but it should have been skipped"
+      when: hypervisor_skip_vm.stdout not in hostvars['controller-0']['compute0']
+
+    - name: 13 Fetch hypervisor for ignore-this-vm
+      ansible.builtin.shell: |
+        openstack --os-cloud default server show ignore-this-vm |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
+      register: hypervisor_ignore_vm
+      changed_when: false
+
+    - name: 13 Check ignore-this-vm was NOT evacuated
+      ansible.builtin.fail:
+        msg: "ignore-this-vm was evacuated, but it should have been skipped"
+      when: hypervisor_ignore_vm.stdout not in hostvars['controller-0']['compute0']
+
+    - name: 13 Fetch vm-ha status
+      ansible.builtin.shell: |
+        openstack --os-cloud default server show vm-ha |grep vm_state |tail -1 |awk '{print $4}'
+      register: vm_ha_status
+      changed_when: false
+
+    - name: 13 Check vm-ha status is active
+      ansible.builtin.fail:
+        msg: "vm-ha should be active"
+      when: vm_ha_status.stdout != "active"
+
+    - name: 13 Check instanceha logs for skip message
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0
+      register: logs
+      changed_when: false
+
+    - name: 13 Verify skip log entries
+      ansible.builtin.fail:
+        msg: "Expected skip log messages not found in instanceha logs"
+      when: "'Skipping' not in logs.stdout or 'skip-me' not in logs.stdout or 'ignore-this' not in logs.stdout"
+
+    - name: 13 Remove vm-ha
       openstack.cloud.server:
         cloud: default
         auth:
@@ -232,51 +213,61 @@
         state: absent
         name: vm-ha
 
-    - name: 02 Remove tagged flavor
-      openstack.cloud.compute_flavor:
+    - name: 13 Remove skip-me-vm
+      openstack.cloud.server:
         cloud: default
+        auth:
+          project_name: admin
         state: absent
-        name: iha.nanoha
+        name: skip-me-vm
 
-    - name: 02 Fetch compute service (hypervisor) info from OpenStack
-      openstack.cloud.compute_service_info:
+    - name: 13 Remove ignore-this-vm
+      openstack.cloud.server:
         cloud: default
-        binary: "nova-compute"
-      register: hypervisor_list
+        auth:
+          project_name: admin
+        state: absent
+        name: ignore-this-vm
 
-    - name: 02 Set fact
-      ansible.builtin.set_fact:
-        hypervisors: "{{ hypervisor_list.compute_services | map(attribute='host') | list | sort }}"
-
-    - name: 02 Wait compute-0 to be up
+    - name: 13 Wait compute-0 to be up
       openstack.cloud.compute_service_info:
         cloud: default
         binary: "nova-compute"
         host: "{{ compute0 }}"
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
-      retries: 36
+      retries: 60
       delay: 10
 
-    - name: 02 Wait compute-0 to be enabled
+    - name: 13 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
         cloud: default
         binary: "nova-compute"
         host: "{{ compute0 }}"
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
-      retries: 180
+      retries: 60
       delay: 10
 
     - name: sleep 60
       ansible.builtin.pause:
         minutes: 1
 
-    - name: 02 save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+    - name: 13 save logs
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
-    - name: 02 Create results file (success)
+    - name: 13 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 13 Apply reset config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 13 Create results file (success)
       ansible.builtin.template:
         src: templates/iha-tests-results.xml.j2
         dest: /home/zuul/iha-tests-results/{{ name }}.xml

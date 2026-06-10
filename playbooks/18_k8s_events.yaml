@@ -1,0 +1,301 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 18 Test K8s event emission during evacuation lifecycle
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "18-test-k8s-events"
+
+  pre_tasks:
+    - name: 18 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 18 Set dynamic compute node names using parsed compute details
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+  tasks:
+    - name: 18 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 18 Enable smart evacuation for completion tracking
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        smart_evacuation: "true"
+
+    - name: 18 Apply config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 18 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 18 Wait for config reload
+      ansible.builtin.pause:
+        minutes: 1
+
+    - name: 18 Record current event timestamp for later filtering
+      ansible.builtin.shell: |
+        date -u +%Y-%m-%dT%H:%M:%SZ
+      register: test_start_time
+      changed_when: false
+
+    - name: 18 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 18 Set compute-0 hostname
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+    - name: 18 Create instance on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_zero_hostname }}"
+        name: c1-events
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+- name: 18 Crash compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 18 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 18 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 18 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 18 Verify K8s events emitted during evacuation
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 18 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 18 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 18 Wait for compute-0 to transition to down
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 12
+      delay: 10
+
+    - name: 18 Wait for VM to be evacuated
+      openstack.cloud.server_info:
+        cloud: default
+        name: c1-events
+      register: vm_status
+      until: vm_status.servers[0].status == "ACTIVE" and vm_status.servers[0].hypervisor_hostname != compute_zero_hostname
+      retries: 30
+      delay: 10
+
+    - name: 18 Check for HostDown K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=HostDown --no-headers 2>/dev/null | grep -c 'HostDown' || echo 0
+      register: hostdown_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: hostdown_events.stdout | int > 0
+
+    - name: 18 Verify HostDown event
+      ansible.builtin.debug:
+        msg: "Found {{ hostdown_events.stdout }} HostDown events"
+
+    - name: 18 Check for EvacuationStarted K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=EvacuationStarted --no-headers 2>/dev/null | grep -c 'EvacuationStarted' || echo 0
+      register: evac_started_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: evac_started_events.stdout | int > 0
+
+    - name: 18 Verify EvacuationStarted event
+      ansible.builtin.debug:
+        msg: "Found {{ evac_started_events.stdout }} EvacuationStarted events"
+
+    - name: 18 Check for InstanceEvacuationStarted K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=InstanceEvacuationStarted --no-headers 2>/dev/null | grep -c 'InstanceEvacuationStarted' || echo 0
+      register: instance_evac_started_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: instance_evac_started_events.stdout | int > 0
+
+    - name: 18 Verify InstanceEvacuationStarted event
+      ansible.builtin.debug:
+        msg: "Found {{ instance_evac_started_events.stdout }} InstanceEvacuationStarted events"
+
+    - name: 18 Check for InstanceEvacuationSucceeded K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=InstanceEvacuationSucceeded --no-headers 2>/dev/null | grep -c 'InstanceEvacuationSucceeded' || echo 0
+      register: instance_evac_succeeded_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: instance_evac_succeeded_events.stdout | int > 0
+
+    - name: 18 Verify InstanceEvacuationSucceeded event
+      ansible.builtin.debug:
+        msg: "Found {{ instance_evac_succeeded_events.stdout }} InstanceEvacuationSucceeded events"
+
+    - name: 18 Check for EvacuationSucceeded K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=EvacuationSucceeded --no-headers 2>/dev/null | grep -c 'EvacuationSucceeded' || echo 0
+      register: evac_succeeded_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: evac_succeeded_events.stdout | int > 0
+
+    - name: 18 Verify EvacuationSucceeded event
+      ansible.builtin.debug:
+        msg: "Found {{ evac_succeeded_events.stdout }} EvacuationSucceeded events"
+
+    - name: 18 Wait for compute-0 to transition to up
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
+      retries: 12
+      delay: 10
+
+    - name: 18 Wait for compute-0 to transition to enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
+      retries: 60
+      delay: 10
+
+    - name: 18 Check for HostReenabled K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=HostReenabled --no-headers 2>/dev/null | grep -c 'HostReenabled' || echo 0
+      register: reenabled_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: reenabled_events.stdout | int > 0
+
+    - name: 18 Verify HostReenabled event
+      ansible.builtin.debug:
+        msg: "Found {{ reenabled_events.stdout }} HostReenabled events"
+
+    - name: 18 Print summary of all K8s events found
+      ansible.builtin.debug:
+        msg: |
+          K8s Event Summary:
+            HostDown: {{ hostdown_events.stdout }}
+            EvacuationStarted: {{ evac_started_events.stdout }}
+            InstanceEvacuationStarted: {{ instance_evac_started_events.stdout }}
+            InstanceEvacuationSucceeded: {{ instance_evac_succeeded_events.stdout }}
+            EvacuationSucceeded: {{ evac_succeeded_events.stdout }}
+            HostReenabled: {{ reenabled_events.stdout }}
+
+- name: 18 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "18-test-k8s-events"
+
+  tasks:
+    - name: 18 Remove test VM
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: c1-events
+
+    - name: 18 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 18 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 18 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 18 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 18 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

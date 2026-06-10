@@ -5,6 +5,10 @@ metadata:
 spec:
   caBundleSecretName: combined-ca-bundle
   instanceHaConfigMap: instanceha-0-config
+{% if applicationCredentialSecret is defined %}
+  auth:
+    applicationCredentialSecret: {{ applicationCredentialSecret }}
+{% endif %}
 {% if networkattachments is defined %}
-  networkAttachments: ['internalapi']
+  networkAttachments: {{ networkattachments_list | default("['internalapi']") }}
 {% endif %}

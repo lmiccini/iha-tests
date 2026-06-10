@@ -1,0 +1,386 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 10 Check all compute nodes are running before VM creation
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: 10 List all VMs
+      community.libvirt.virt:
+        command: list_vms
+      register: vms_all
+
+    - name: 10 Filter all VMs containing "compute" in the name
+      set_fact:
+        vms: "{{ vms_all.list_vms | select('search', 'compute') | list }}"
+
+    - name: 10 List running VMs
+      community.libvirt.virt:
+        command: list_vms
+        state: running
+      register: running_vms_all
+
+    - name: 10 Filter running VMs containing "compute" in the name
+      set_fact:
+        running_vms: "{{ running_vms_all.list_vms | select('search', 'compute') | list }}"
+
+    - name: 10 Get list of not running VMs containing "compute" in the name
+      set_fact:
+        not_running_vms: "{{ vms | difference(running_vms) }}"
+
+    - name: 10 Debug not running VMs
+      debug:
+        var: not_running_vms
+
+    - name: 10 Start VMs that are not running
+      community.libvirt.virt:
+        name: "{{ item }}"
+        state: running
+      loop: "{{ not_running_vms }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: 10 Update list of not running VMs after start attempt
+      community.libvirt.virt:
+        command: list_vms
+        state: running
+      register: updated_running_vms
+
+    - name: 10 Set new list of not running VMs
+      set_fact:
+        not_running_vms: "{{ vms | difference(updated_running_vms.list_vms | select('search', 'compute') | list) }}"
+
+    - name: 10 Fail if there are still VMs not running
+      fail:
+        msg: "The following compute VMs are still not running: {{ not_running_vms }}"
+      when: not_running_vms | length > 0
+
+- name: 10 Generate detailed compute node information on the controller
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+  vars:
+    name: "10-test-stress-vms"
+
+  tasks:
+    - name: 10 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 10 Fetch compute service (hypervisor) info from OpenStack
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+
+    - name: 10 Reset compute_details variable
+      set_fact:
+        compute_details: []
+
+    - name: 10 Extract detailed information for nova-compute hypervisors
+      set_fact:
+        compute_details: "{{ compute_details | default([]) + [{'hostname': item.host, 'readable_hostname': (item.host | regex_replace('compute-[^.-]+-(\\d+).*', 'compute-\\1')), 'state': item.state, 'status': item.status}] }}"
+      loop: "{{ hypervisor_list.compute_services | selectattr('binary', 'equalto', 'nova-compute') }}"
+
+    - name: 10 Sort compute details by hostname
+      set_fact:
+        #compute_details: "{{ compute_details | unique(attribute='hostname') | sort(attribute='hostname') }}"
+        compute_details: "{{ compute_details | sort(attribute='hostname') }}"
+
+    - name: 10 Save compute details to JSON file on controller
+      copy:
+        content: "{{ compute_details | to_json }}"
+        dest: /tmp/compute_details.json
+        force: yes
+
+    - name: 10 Transfer JSON file from controller to localhost
+      fetch:
+        src: /tmp/compute_details.json
+        dest: /tmp/compute_details.json
+        flat: yes
+
+- name: 10 Create VMs after checking compute nodes are running
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    num_stress_vms: "{{ number_stress_vms | default(1) | int }}"
+
+  pre_tasks:
+    - name: 10 Load and set compute details from JSON file as a fact
+      set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 10 Debug the generated compute node names
+      debug:
+        var: compute_names
+
+    - name: 10 Set dynamic compute node names using parsed compute details
+      set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+    - name: 10 Debug the generated compute node names
+      debug:
+        var: compute_names
+
+    - name: 10 Set quota per instances to 100 for project admin
+      openstack.cloud.quota:
+        cloud: default
+        instances: 100
+        cores: 120
+        name: admin
+
+    - name: 10 Fetch all existing instances
+      openstack.cloud.server_info:
+        cloud: default
+      register: existing_instances
+
+    - name: 10 Debug list of existing instances
+      debug:
+        msg: "{{ existing_instances }}"
+
+    - name: 10 Delete all existing instances
+      openstack.cloud.server:
+        cloud: default
+        state: absent
+        name: "{{ item.name }}"
+      async: 600
+      poll: 0
+      loop: "{{ existing_instances.servers }}"
+      when: existing_instances.servers | length > 0
+      register: deletion_tasks
+
+    - name: 10 Wait for all deletions to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ deletion_tasks.results }}"
+      register: deletion_results
+      until: deletion_results.finished
+      retries: 20
+      delay: 15
+
+    - name: 10 Wait for all compute resource providers to be available in placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ item.hostname }}" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+      loop: "{{ compute_details }}"
+      loop_control:
+        label: "{{ item.readable_hostname }}"
+
+    - name: 10 Create {{ num_stress_vms }} instances on each hypervisor using compute details
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ item_vm.0.hostname }}"
+        name: "{{ item_vm.0.readable_hostname }}-vm{{ item_vm.1 | string }}"
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        auto_ip: false
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+        wait: true
+      loop: "{{ compute_details | product(range(1, (num_stress_vms | default(1) | int) + 1) | list) }}"
+      loop_control:
+        loop_var: item_vm
+      async: 6000
+      poll: 0
+      ignore_errors: yes
+      register: vm_creation_tasks
+
+    - name: 10 Wait for all VMs to be created and active
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: vm_creation_result
+      until: vm_creation_result.finished
+      retries: 20
+      delay: 15
+      loop: "{{ vm_creation_tasks.results }}"
+
+    - name: 10 Output confirmation of creation
+      debug:
+        msg: "Created {{ num_vms }} instances on {{ item_vm.0.readable_hostname }}"
+      when: item_vm is defined
+
+- name: 10 Crash compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 10 Load and set compute details from JSON file as a fact
+      set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 10 Format compute-0 VM name for libvirt
+      set_fact:
+        compute_zero_vm_name: "cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace', '\\.ctlplane\\.example\\.com$', '') | first }}"
+
+    - name: 10 Verify the formatted compute-0 VM name for libvirt
+      debug:
+        msg: "The formatted VM name for compute-0 on libvirt is {{ compute_zero_vm_name }}"
+
+    - name: 10 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+      when: compute_zero_vm_name is defined
+
+- name: 10 Wait for compute-0 to transition to 'down' on OpenStack controller
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 10 Load and set compute details from JSON file as a fact
+      set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 10 Set compute_zero_hostname fact for compute-0
+      set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+    - name: 10 Retrieve VMs that were running on compute-0 before shutdown
+      openstack.cloud.server_info:
+        cloud: default
+      register: all_vm_info
+
+    - name: 10 Set fact for VMs initially on compute-0
+      set_fact:
+        compute_zero_vms: "{{ all_vm_info.servers | selectattr('hypervisor_hostname', 'equalto', compute_zero_hostname) | map(attribute='name') | list }}"
+
+  tasks:
+    - name: 10 Wait for compute-0 to transition to 'down' on OpenStack controller
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 12
+      delay: 10
+
+    - name: 10 Fetch and check VM status on each VM until ACTIVE
+      openstack.cloud.server_info:
+        cloud: default
+        name: "{{ vm_name }}"
+      register: vm_status_info
+      until: vm_status_info.servers[0].status == "ACTIVE"
+      retries: 12
+      delay: 10
+      loop: "{{ compute_zero_vms }}"
+      loop_control:
+        loop_var: vm_name
+
+    - name: 10 Wait until all VMs have been evacuated to other hypervisors
+      openstack.cloud.server_info:
+        cloud: default
+        name: "{{ vm_name }}"
+      register: vm_status_info
+      until:
+        vm_status_info.servers is defined and
+        vm_status_info.servers[0].hypervisor_hostname != compute_zero_hostname
+      retries: 12
+      delay: 10
+      loop: "{{ compute_zero_vms }}"
+      loop_control:
+        loop_var: vm_name
+
+- name: 10 Cleanup VMs
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+  vars:
+    name: "10-test-stress-vms"
+
+  pre_tasks:
+    - name: 10 Load and set compute details from JSON file as a fact
+      set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 10 Retrieve all VM names
+      openstack.cloud.server_info:
+        cloud: default
+      register: all_vms_info
+
+    - name: 10 Filter VMs with names matching 'vm[0-9]+$'
+      set_fact:
+        vms_to_remove: "{{ all_vms_info.servers | selectattr('name', 'search', 'vm[0-9]+$') | map(attribute='name') | list }}"
+
+  tasks:
+    - name: 10 Remove all created VMs
+      openstack.cloud.server:
+        cloud: default
+        state: absent
+        name: "{{ item }}"
+      loop: "{{ vms_to_remove }}"
+      async: 600
+      poll: 0
+      ignore_errors: true
+      register: deletion_tasks
+
+    - name: 10 Wait for all VM deletions to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ deletion_tasks.results }}"
+      register: deletion_results
+      until: deletion_results.finished
+      retries: 20
+      delay: 15
+
+    - name: 10 Wait for compute-0 to transition to 'up'
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
+      retries: 60
+      delay: 10
+
+    - name: 10 Wait for compute-0 to transition to 'enable' on OpenStack controller
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
+      retries: 12
+      delay: 10
+
+    - name: 10 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 10 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

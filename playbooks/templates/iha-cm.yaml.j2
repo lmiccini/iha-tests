@@ -14,10 +14,21 @@ data:
       THRESHOLD: "{{ threshold | default('50') }}"
       WORKERS: "{{ workers | default('4') }}"
       RESERVED_HOSTS: "{{ reserved_hosts | default('false') }}"
+      FORCE_RESERVED_HOST_EVACUATION: "{{ force_reserved_host_evacuation | default('false') }}"
       LEAVE_DISABLED: "{{ leave_disabled | default('false') }}"
       CHECK_KDUMP: "{{ check_kdump | default('false') }}"
+      KDUMP_TIMEOUT: "{{ kdump_timeout | default('30') }}"
       LOGLEVEL: "{{ loglevel | default('info') }}"
       DISABLED: "{{ disabled | default('false') }}"
+      SSL_VERIFY: "{{ ssl_verify | default('true') }}"
+      FENCING_TIMEOUT: "{{ fencing_timeout | default('30') }}"
+      HASH_INTERVAL: "{{ hash_interval | default('60') }}"
+      SKIP_SERVERS_WITH_NAME: "{{ skip_servers_with_name | default('') }}"
+      CHECK_HEARTBEAT: "{{ check_heartbeat | default('false') }}"
+      HEARTBEAT_TIMEOUT: "{{ heartbeat_timeout | default('120') }}"
+      ORCHESTRATED_RESTART: "{{ orchestrated_restart | default('false') }}"
+      EVACUATION_RETRIES: "{{ evacuation_retries | default('5') }}"
+      FORCE_ENABLE: "{{ force_enable | default('false') }}"
 kind: ConfigMap
 metadata:
   name: instanceha-0-config

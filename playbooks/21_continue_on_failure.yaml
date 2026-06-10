@@ -1,0 +1,640 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 21 Check all compute nodes are running before test
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: 21 List all VMs
+      community.libvirt.virt:
+        command: list_vms
+      register: vms_all
+
+    - name: 21 Filter all VMs containing "compute" in the name
+      ansible.builtin.set_fact:
+        vms: "{{ vms_all.list_vms | select('search', 'compute') | list }}"
+
+    - name: 21 List running VMs
+      community.libvirt.virt:
+        command: list_vms
+        state: running
+      register: running_vms_all
+
+    - name: 21 Filter running VMs containing "compute" in the name
+      ansible.builtin.set_fact:
+        running_vms: "{{ running_vms_all.list_vms | select('search', 'compute') | list }}"
+
+    - name: 21 Get list of not running VMs
+      ansible.builtin.set_fact:
+        not_running_vms: "{{ vms | difference(running_vms) }}"
+
+    - name: 21 Start VMs that are not running
+      community.libvirt.virt:
+        name: "{{ item }}"
+        state: running
+      loop: "{{ not_running_vms }}"
+
+    - name: 21 Fail if there are still VMs not running
+      community.libvirt.virt:
+        command: list_vms
+        state: running
+      register: updated_running_vms
+
+    - name: 21 Check all compute VMs are running
+      ansible.builtin.fail:
+        msg: "Some compute VMs are still not running"
+      when: (vms | difference(updated_running_vms.list_vms | select('search', 'compute') | list)) | length > 0
+
+- name: 21 Test continue-on-failure with partial evacuation
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "21-test-continue-on-failure"
+
+  pre_tasks:
+    - name: 21 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 21 Set dynamic compute node names using parsed compute details
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+  tasks:
+    - name: 21 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 21 Ensure all compute services are up and enabled before setup
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service set --enable --up {{ item }} nova-compute
+      loop: "{{ compute_names }}"
+      changed_when: false
+      ignore_errors: true
+
+    - name: 21 Wait for all compute services to be up
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+      register: all_services
+      until: all_services.compute_services | rejectattr('state', 'equalto', 'up') | list | length == 0
+      retries: 24
+      delay: 10
+
+    - name: 21 Enable smart evacuation
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        smart_evacuation: "true"
+
+    - name: 21 Apply config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 21 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 21 Wait for config reload
+      ansible.builtin.pause:
+        minutes: 1
+
+    - name: 21 Delete all existing instances
+      openstack.cloud.server_info:
+        cloud: default
+      register: existing_instances
+
+    - name: 21 Remove existing instances
+      openstack.cloud.server:
+        cloud: default
+        state: absent
+        name: "{{ item.name }}"
+      async: 600
+      poll: 0
+      loop: "{{ existing_instances.servers }}"
+      when: existing_instances.servers | length > 0
+      register: deletion_tasks
+
+    - name: 21 Wait for all deletions to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ deletion_tasks.results }}"
+      register: deletion_results
+      until: deletion_results.finished
+      retries: 20
+      delay: 15
+      when: existing_instances.servers | length > 0
+
+    - name: 21 Create partial-fill flavor (leaves room for ~1 iha.evac-test VM)
+      openstack.cloud.compute_flavor:
+        cloud: default
+        state: present
+        name: iha.partial-fill
+        ram: 9000
+        vcpus: 4
+        disk: 1
+        extra_specs:
+          hw_rng:allowed: "True"
+
+    - name: 21 Create full-fill flavor (leaves no room for iha.evac-test VMs)
+      openstack.cloud.compute_flavor:
+        cloud: default
+        state: present
+        name: iha.full-fill
+        ram: 11000
+        vcpus: 4
+        disk: 1
+        extra_specs:
+          hw_rng:allowed: "True"
+
+    - name: 21 Create iha.evac-test flavor for test VMs
+      openstack.cloud.compute_flavor:
+        cloud: default
+        state: present
+        name: iha.evac-test
+        ram: 2500
+        vcpus: 1
+        disk: 1
+        extra_specs:
+          hw_rng:allowed: "True"
+
+    - name: 21 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 21 Set compute-1 hostname
+      ansible.builtin.set_fact:
+        compute_one_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+
+    - name: 21 Set compute-2 hostname
+      ansible.builtin.set_fact:
+        compute_two_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+
+    - name: 21 Wait for compute-1 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute1_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute1_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 21 Wait for compute-2 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute2_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute2_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 21 Fill compute-1 with partial-fill VM (leaves ~4GB free for 1 iha.evac-test VM)
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_one_hostname }}"
+        name: compute-1-vmfill1
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.partial-fill
+        auto_ip: false
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 21 Fill compute-2 with full-fill VM (leaves ~2GB free, not enough for iha.evac-test)
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_two_hostname }}"
+        name: compute-2-vmfill1
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.full-fill
+        auto_ip: false
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 21 Discover all compute hosts
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service list --service nova-compute -f value -c Host
+      register: all_computes
+      changed_when: false
+
+    - name: 21 Identify extra computes beyond compute-0/1/2
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        extra_computes: >-
+          {{ all_computes.stdout_lines | difference([
+            compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first,
+            compute_one_hostname,
+            compute_two_hostname
+          ]) }}
+
+    - name: 21 Wait for extra compute resource providers in placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ item }}" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+      loop: "{{ extra_computes }}"
+      when: extra_computes | length > 0
+
+    - name: 21 Fill extra computes to block fallback evacuation
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ item }}"
+        name: "extra-vmfill-{{ idx }}"
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.full-fill
+        auto_ip: false
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+      loop: "{{ extra_computes }}"
+      loop_control:
+        index_var: idx
+      when: extra_computes | length > 0
+
+    - name: 21 Create vm-cof-1 on compute-0 (should succeed - fits on compute-1)
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: nova:{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}
+        name: vm-cof-1
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.evac-test
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 21 Create vm-cof-2 on compute-0 (expected to fail - no capacity left)
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: nova:{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}
+        name: vm-cof-2
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.evac-test
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 21 Create vm-cof-3 on compute-0 (expected to fail - no capacity left)
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: nova:{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}
+        name: vm-cof-3
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.evac-test
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+- name: 21 Crash compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 21 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 21 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 21 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 21 Verify continue-on-failure semantics
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 21 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 21 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 21 Wait for compute-0 to transition to down
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 12
+      delay: 10
+
+    - name: 21 List pods in the openstack namespace
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: openstack
+      register: pod_list
+
+    - name: 21 Filter for instanceha pod
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_list.resources | map(attribute='metadata.name') | select('search', 'instanceha') | list | first | default('', true) }}"
+
+    - name: 21 Wait for evacuation to process all VMs
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 500
+        all_containers: true
+      register: instanceha_logs
+      retries: 60
+      delay: 10
+      until: "'(new evacuations) succeeded' in instanceha_logs.log or '(new evacuations) failed' in instanceha_logs.log"
+
+    - name: 21 Assert all 3 VMs were attempted (continue-on-failure, not fail-fast)
+      ansible.builtin.assert:
+        that:
+          - instanceha_logs.log | regex_findall('Processing evacuation for server') | length >= 3
+        fail_msg: >
+          Expected all 3 VMs to be attempted. InstanceHA should not stop after the first failure.
+          Found {{ instanceha_logs.log | regex_findall('Processing evacuation for server') | length }} processing attempts.
+
+    - name: 21 Assert failure messages present in logs
+      ansible.builtin.assert:
+        that:
+          - "'Giving up' in instanceha_logs.log or 'Failed evacuating' in instanceha_logs.log or 'Evacuation failed' in instanceha_logs.log"
+        fail_msg: "No failure messages found in logs — expected at least one VM evacuation to fail"
+
+    - name: 21 Get status of all test VMs
+      openstack.cloud.server_info:
+        cloud: default
+        name: "vm-cof-{{ item }}"
+      register: vm_statuses
+      loop:
+        - "1"
+        - "2"
+        - "3"
+
+    - name: 21 Build VM status summary
+      ansible.builtin.set_fact:
+        active_vms: "{{ vm_statuses.results | map(attribute='servers') | flatten | selectattr('status', 'equalto', 'ACTIVE') | list }}"
+        error_vms: "{{ vm_statuses.results | map(attribute='servers') | flatten | selectattr('status', 'equalto', 'ERROR') | list }}"
+        evacuated_vms: "{{ vm_statuses.results | map(attribute='servers') | flatten | rejectattr('hypervisor_hostname', 'equalto', compute_zero_hostname) | list }}"
+
+    - name: 21 Assert at least one VM failed evacuation
+      ansible.builtin.assert:
+        that:
+          - error_vms | length > 0
+        fail_msg: >
+          Expected at least one VM to be in ERROR state (no capacity).
+          ERROR count={{ error_vms | length }}
+
+    - name: 21 Wait for compute-0 disabled reason to contain FAILED marker
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: compute_0_service
+      retries: 12
+      delay: 10
+      until: "'evacuation FAILED' in compute_0_service.compute_services[0].disabled_reason"
+
+    - name: 21 Assert disabled reason is evacuation FAILED (not complete)
+      ansible.builtin.assert:
+        that:
+          - "'evacuation FAILED' in compute_0_service.compute_services[0].disabled_reason"
+        fail_msg: >
+          Expected disabled_reason to contain 'evacuation FAILED' for partial failure.
+          Got: {{ compute_0_service.compute_services[0].disabled_reason }}
+
+    - name: 21 Check for EvacuationFailed K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=EvacuationFailed --no-headers 2>/dev/null | grep -c 'EvacuationFailed' || echo 0
+      register: evac_failed_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: evac_failed_events.stdout | int > 0
+
+    - name: 21 Assert EvacuationFailed event was emitted
+      ansible.builtin.assert:
+        that:
+          - evac_failed_events.stdout | int > 0
+        fail_msg: "No EvacuationFailed K8s event found"
+
+    - name: 21 Print continue-on-failure results summary
+      ansible.builtin.debug:
+        msg: |
+          Continue-on-Failure Results:
+            Total VMs: 3
+            ACTIVE (evacuated): {{ active_vms | length }}
+            ERROR (failed): {{ error_vms | length }}
+            Disabled reason: {{ compute_0_service.compute_services[0].disabled_reason }}
+            EvacuationFailed events: {{ evac_failed_events.stdout }}
+
+    - name: 21 Save logs
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/21_continue_on_failure.log
+      changed_when: false
+
+- name: 21 Restart compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 21 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 21 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 21 Restart the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: running
+
+- name: 21 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "21-test-continue-on-failure"
+
+  pre_tasks:
+    - name: 21 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 21 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+    - name: 21 Retrieve all VM names
+      openstack.cloud.server_info:
+        cloud: default
+      register: all_vms_info
+
+    - name: 21 Filter VMs to remove (vm-cof and vmfill)
+      ansible.builtin.set_fact:
+        vms_to_remove: "{{ all_vms_info.servers | selectattr('name', 'search', 'vm-cof|vmfill') | map(attribute='name') | list }}"
+
+  tasks:
+    - name: 21 Remove all test VMs
+      openstack.cloud.server:
+        cloud: default
+        state: absent
+        name: "{{ item }}"
+      loop: "{{ vms_to_remove }}"
+      async: 600
+      poll: 0
+      ignore_errors: true
+      register: deletion_tasks
+
+    - name: 21 Wait for all VM deletions to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ deletion_tasks.results }}"
+      register: deletion_results
+      until: deletion_results.finished
+      retries: 20
+      delay: 15
+
+    - name: 21 Delete test flavors
+      openstack.cloud.compute_flavor:
+        cloud: default
+        state: absent
+        name: "{{ item }}"
+      loop:
+        - iha.partial-fill
+        - iha.full-fill
+        - iha.evac-test
+
+    - name: 21 Enable compute-0 and unset forced_down
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service set --enable --up {{ compute_zero_hostname }} nova-compute
+      changed_when: false
+
+    - name: 21 Wait compute-0 to be up
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: compute_0_status
+      until: "'up' in compute_0_status.compute_services | map(attribute='state')"
+      retries: 24
+      delay: 10
+
+    - name: 21 Wait compute-0 to be enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: compute_0_status
+      until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
+      retries: 60
+      delay: 10
+
+    - name: 21 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 21 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 21 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 21 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 21 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

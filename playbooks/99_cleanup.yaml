@@ -57,4 +57,8 @@
         name: "{{ item }}"
       loop:
         - iha.nano
+        - iha.nanoha
+        - iha.evac-test
+        - iha.partial-fill
+        - iha.fill
         - fill

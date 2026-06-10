@@ -1,0 +1,380 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 16 Pre-cleanup (idempotent re-run)
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+  tasks:
+    - name: 16 Pre-cleanup - Remove leftover VMs
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: "{{ item }}"
+      loop:
+        - vm-active
+        - vm-shutoff
+        - vm-error
+      ignore_errors: true
+
+- name: 16 Test SHUTOFF and ERROR VM state preservation during evacuation
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "16-test-shutoff-error-states"
+
+  pre_tasks:
+    - name: 16 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 16 Set dynamic compute node names using parsed compute details
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+  tasks:
+    - name: 16 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 16 Enable smart evacuation
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        smart_evacuation: "true"
+
+    - name: 16 Apply config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 16 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 16 Wait for config reload
+      ansible.builtin.pause:
+        minutes: 1
+
+    - name: 16 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: 16 Set compute-0 hostname
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+    - name: 16 Create vm-active on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_zero_hostname }}"
+        name: vm-active
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 16 Create vm-shutoff on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_zero_hostname }}"
+        name: vm-shutoff
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 16 Create vm-error on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: "nova:{{ compute_zero_hostname }}"
+        name: vm-error
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 16 Stop vm-shutoff to set SHUTOFF state
+      ansible.builtin.shell: |
+        openstack --os-cloud default server stop vm-shutoff
+      changed_when: false
+
+    - name: 16 Wait for vm-shutoff to reach SHUTOFF state
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-shutoff
+      register: shutoff_status
+      until: shutoff_status.servers[0].status == "SHUTOFF"
+      retries: 12
+      delay: 5
+
+    - name: 16 Set vm-error to ERROR state
+      ansible.builtin.shell: |
+        openstack --os-cloud default server set --state error vm-error
+      changed_when: false
+
+    - name: 16 Wait for vm-error to reach ERROR state
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-error
+      register: error_status
+      until: error_status.servers[0].status == "ERROR"
+      retries: 12
+      delay: 5
+
+- name: 16 Crash compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 16 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 16 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 16 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 16 Verify state preservation after evacuation
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 16 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 16 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 16 Wait for compute-0 to transition to down
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 12
+      delay: 10
+
+    - name: 16 List pods in the openstack namespace
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: openstack
+      register: pod_list
+
+    - name: 16 Filter for instanceha pod
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_list.resources | map(attribute='metadata.name') | select('search', 'instanceha') | list | first | default('', true) }}"
+
+    - name: 16 Wait for evacuation to complete
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 200
+        all_containers: true
+      register: instanceha_logs
+      retries: 30
+      delay: 10
+      until: "'completed successfully' in instanceha_logs.log or 'evacuated successfully' in instanceha_logs.log"
+
+    - name: 16 Verify vm-active is ACTIVE on another host
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-active
+      register: active_info
+      retries: 12
+      delay: 10
+      until: active_info.servers[0].status == "ACTIVE" and active_info.servers[0].hypervisor_hostname != compute_zero_hostname
+
+    - name: 16 Assert vm-active is ACTIVE
+      ansible.builtin.assert:
+        that:
+          - active_info.servers[0].status == "ACTIVE"
+          - active_info.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: "vm-active is not ACTIVE on another host"
+
+    - name: 16 Verify vm-shutoff is SHUTOFF on another host
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-shutoff
+      register: shutoff_info
+      retries: 12
+      delay: 10
+      until: shutoff_info.servers[0].hypervisor_hostname != compute_zero_hostname
+
+    - name: 16 Assert vm-shutoff preserved SHUTOFF state
+      ansible.builtin.assert:
+        that:
+          - shutoff_info.servers[0].status == "SHUTOFF"
+          - shutoff_info.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: "vm-shutoff did not preserve SHUTOFF state after evacuation (status={{ shutoff_info.servers[0].status }})"
+
+    - name: 16 Verify vm-error is ERROR on another host
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-error
+      register: error_info
+      retries: 12
+      delay: 10
+      until: error_info.servers[0].hypervisor_hostname != compute_zero_hostname
+
+    - name: 16 Assert vm-error preserved ERROR state
+      ansible.builtin.assert:
+        that:
+          - error_info.servers[0].status == "ERROR"
+          - error_info.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: "vm-error did not preserve ERROR state after evacuation (status={{ error_info.servers[0].status }})"
+
+    - name: 16 Verify SHUTOFF state restoration in logs
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 200
+        all_containers: true
+      register: state_logs
+
+    - name: 16 Assert SHUTOFF state handling logged
+      ansible.builtin.assert:
+        that:
+          - "'SHUTOFF state' in state_logs.log"
+        fail_msg: "No SHUTOFF state handling message found in logs"
+
+    - name: 16 Assert ERROR state handling logged
+      ansible.builtin.assert:
+        that:
+          - "'ERROR state' in state_logs.log"
+        fail_msg: "No ERROR state handling message found in logs"
+
+    - name: 16 Wait for compute-0 to transition to up
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
+      retries: 12
+      delay: 10
+
+    - name: 16 Wait for compute-0 to transition to enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
+      retries: 12
+      delay: 10
+
+- name: 16 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "16-test-shutoff-error-states"
+
+  tasks:
+    - name: 16 Remove vm-active
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-active
+
+    - name: 16 Remove vm-shutoff
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-shutoff
+
+    - name: 16 Remove vm-error
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-error
+
+    - name: 16 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 16 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 16 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 16 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 16 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

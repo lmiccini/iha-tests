@@ -1,0 +1,673 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 26 Pre-cleanup leftover resources
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 26 Set dynamic compute node names using parsed compute details
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+  tasks:
+    - name: 26 Pre-cleanup - Remove leftover VMs
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: "{{ item }}"
+      loop:
+        - vm-tagged-threshold
+        - vm-tagged-blocked-0
+        - vm-tagged-blocked-1
+        - vm-tagged-blocked-2
+      ignore_errors: true
+
+    - name: 26 Pre-cleanup - Remove hosts from evacuable-agg
+      ansible.builtin.shell: |
+        for host in $(openstack --os-cloud default aggregate show evacuable-agg -f json 2>/dev/null | python3 -c "import json,sys; data=json.load(sys.stdin); print(' '.join(data.get('hosts',[])))"); do
+          openstack --os-cloud default aggregate remove host evacuable-agg "$host" 2>/dev/null || true
+        done
+        openstack --os-cloud default aggregate delete evacuable-agg 2>/dev/null || true
+      changed_when: false
+      ignore_errors: true
+
+- name: 26 Check all compute nodes are running before test
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: 26 List all VMs
+      community.libvirt.virt:
+        command: list_vms
+      register: vms_all
+
+    - name: 26 Filter all VMs containing "compute" in the name
+      ansible.builtin.set_fact:
+        vms: "{{ vms_all.list_vms | select('search', 'compute') | list }}"
+
+    - name: 26 List running VMs
+      community.libvirt.virt:
+        command: list_vms
+        state: running
+      register: running_vms_all
+
+    - name: 26 Filter running VMs containing "compute" in the name
+      ansible.builtin.set_fact:
+        running_vms: "{{ running_vms_all.list_vms | select('search', 'compute') | list }}"
+
+    - name: 26 Get list of not running VMs
+      ansible.builtin.set_fact:
+        not_running_vms: "{{ vms | difference(running_vms) }}"
+
+    - name: 26 Start VMs that are not running
+      community.libvirt.virt:
+        name: "{{ item }}"
+        state: running
+      loop: "{{ not_running_vms }}"
+
+    - name: 26 Fail if there are still VMs not running
+      community.libvirt.virt:
+        command: list_vms
+        state: running
+      register: updated_running_vms
+
+    - name: 26 Check all compute VMs are running
+      ansible.builtin.fail:
+        msg: "Some compute VMs are still not running"
+      when: (vms | difference(updated_running_vms.list_vms | select('search', 'compute') | list)) | length > 0
+
+- name: 26 Setup threshold tagged aggregates test
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "26-test-threshold-tagged-aggregates"
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 26 Set dynamic compute node names using parsed compute details
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+
+    - name: 26 Set evacuable hosts (compute-0 through compute-3)
+      ansible.builtin.set_fact:
+        evacuable_hosts:
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-3') | map(attribute='hostname') | first }}"
+
+    - name: 26 Set compute-0 hostname
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 26 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 26 Ensure all compute services are up and enabled before setup
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service set --enable --up {{ item }} nova-compute
+      loop: "{{ compute_names }}"
+      changed_when: false
+      ignore_errors: true
+
+    - name: 26 Wait for all compute services to be up
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+      register: all_services
+      until: all_services.compute_services | rejectattr('state', 'equalto', 'up') | list | length == 0
+      retries: 24
+      delay: 10
+
+    - name: 26 Create evacuable aggregate
+      ansible.builtin.shell: |
+        openstack --os-cloud default aggregate create evacuable-agg 2>/dev/null || true
+      changed_when: false
+
+    - name: 26 Add evacuable hosts to aggregate (compute-0 through compute-3)
+      ansible.builtin.shell: |
+        openstack --os-cloud default aggregate add host evacuable-agg {{ item }} 2>/dev/null || true
+      loop: "{{ evacuable_hosts }}"
+      changed_when: false
+
+    - name: 26 Tag evacuable aggregate with CUSTOM_HA
+      ansible.builtin.shell: |
+        openstack --os-cloud default aggregate set --property trait:CUSTOM_HA=true evacuable-agg
+      changed_when: false
+
+    - name: 26 Configure IHA with TAGGED_AGGREGATES, THRESHOLD=50, SMART_EVACUATION, long POLL
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        tagged_aggregates: "true"
+        threshold: "50"
+        smart_evacuation: "true"
+        poll: "150"
+
+    - name: 26 Apply config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 26 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 26 Wait for config reload
+      ansible.builtin.pause:
+        minutes: 1
+
+    - name: 26 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ compute_zero_hostname }}" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    # Test 1: 1 of 4 evacuable computes down (25%) - below 50% threshold, should evacuate
+    - name: 26 Display test 1 parameters
+      ansible.builtin.debug:
+        msg: "Test 1: Failing compute-0 (1 of 4 evacuable hosts = 25%, below 50% threshold)"
+
+    - name: 26 Create VM on compute-0 for below-threshold test
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: nova:{{ compute_zero_hostname }}
+        name: vm-tagged-threshold
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+    - name: 26 Verify VM is ACTIVE
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-tagged-threshold
+      register: vm_status
+      retries: 12
+      delay: 10
+      until: vm_status.servers[0].status == "ACTIVE"
+
+- name: 26 Crash compute-0 for test 1
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 26 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 26 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 26 Verify test 1 - below threshold should evacuate
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 26 Set compute-0 hostname
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 26 Wait for compute-0 to transition to down
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 12
+      delay: 10
+
+    - name: 26 Wait for VM to be evacuated (below threshold, should evacuate)
+      openstack.cloud.server_info:
+        cloud: default
+        name: vm-tagged-threshold
+      register: vm_evac
+      retries: 60
+      delay: 10
+      until:
+        - vm_evac.servers[0].status == "ACTIVE"
+        - vm_evac.servers[0].hypervisor_hostname != compute_zero_hostname
+
+    - name: 26 Assert VM was evacuated (below tagged threshold)
+      ansible.builtin.assert:
+        that:
+          - vm_evac.servers[0].status == "ACTIVE"
+          - vm_evac.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: >
+          VM was NOT evacuated despite being below tagged threshold (25% < 50%).
+          Status: {{ vm_evac.servers[0].status }}, Host: {{ vm_evac.servers[0].hypervisor_hostname }}
+
+    - name: 26 Delete VM from test 1
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: vm-tagged-threshold
+
+- name: 26 Restart compute-0 after test 1
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 26 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 26 Restart the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: running
+
+- name: 26 Setup test 2 - exceed threshold
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 26 Set compute hostnames for test 2
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        compute_one_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+        compute_two_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+
+    - name: 26 Set hosts to fail for test 2
+      ansible.builtin.set_fact:
+        hosts_to_fail:
+          - "{{ compute_zero_hostname }}"
+          - "{{ compute_one_hostname }}"
+          - "{{ compute_two_hostname }}"
+
+  tasks:
+    - name: 26 Enable compute-0 and unset forced_down
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service set --enable --up {{ compute_zero_hostname }} nova-compute
+      changed_when: false
+
+    - name: 26 Wait for compute-0 to be up and enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ compute_zero_hostname }}"
+      register: compute_0_status
+      until:
+        - "'up' in compute_0_status.compute_services | map(attribute='state')"
+        - "'enabled' in compute_0_status.compute_services | map(attribute='status')"
+      retries: 24
+      delay: 10
+
+    - name: 26 Wait before test 2
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: 26 Display test 2 parameters
+      ansible.builtin.debug:
+        msg: "Test 2: Failing compute-0, compute-1, compute-2 (3 of 4 evacuable hosts = 75%, above 50% threshold)"
+
+    - name: 26 Wait for compute resource providers to be available in placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ item }}" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+      loop: "{{ hosts_to_fail }}"
+
+    - name: 26 Create VMs on hosts that will fail
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: nova:{{ item }}
+        name: vm-tagged-blocked-{{ idx }}
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+      loop: "{{ hosts_to_fail }}"
+      loop_control:
+        index_var: idx
+
+    - name: 26 Delete InstanceHa CR to stop instanceha pod
+      ansible.builtin.shell: |
+        oc delete instanceha -n openstack instanceha-0 --ignore-not-found
+      changed_when: false
+
+    - name: 26 Wait for instanceha pod to be fully terminated
+      ansible.builtin.shell: |
+        oc get pods -n openstack --no-headers 2>/dev/null | grep -c instanceha || echo 0
+      register: pod_count
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: pod_count.stdout | int == 0
+
+- name: 26 Crash compute-0, compute-1, compute-2 for test 2
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 26 Build list of compute VM names for libvirt
+      ansible.builtin.set_fact:
+        computes_to_crash:
+          - cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace', '\.ctlplane\.example\.com$', '') | first }}
+          - cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | map('regex_replace', '\.ctlplane\.example\.com$', '') | first }}
+          - cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | map('regex_replace', '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 26 Destroy compute VMs on libvirt
+      community.libvirt.virt:
+        name: "{{ item }}"
+        state: destroyed
+      loop: "{{ computes_to_crash }}"
+
+- name: 26 Verify test 2 - above threshold should block evacuation
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 26 Set compute hostnames for verification
+      ansible.builtin.set_fact:
+        hosts_to_fail:
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 26 Recreate InstanceHa CR
+      ansible.builtin.template:
+        src: templates/iha.yaml.j2
+        dest: /home/zuul/iha.yaml
+
+    - name: 26 Apply InstanceHa CR
+      ansible.builtin.shell: oc -n openstack apply -f /home/zuul/iha.yaml
+      changed_when: false
+
+    - name: 26 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 26 List pods in the openstack namespace
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: openstack
+      register: pod_list
+
+    - name: 26 Filter for instanceha pod
+      ansible.builtin.set_fact:
+        instanceha_pod_name: "{{ pod_list.resources | map(attribute='metadata.name') | select('search', 'instanceha') | list | first | default('', true) }}"
+
+    - name: 26 Verify log shows threshold exceeded
+      kubernetes.core.k8s_log:
+        namespace: openstack
+        name: "{{ instanceha_pod_name }}"
+        tail_lines: 300
+        all_containers: true
+      register: instanceha_logs
+      retries: 30
+      delay: 10
+      until: "'exceeds threshold' in instanceha_logs.log and 'Not evacuating' in instanceha_logs.log"
+
+    - name: 26 Verify VMs were NOT evacuated
+      openstack.cloud.server_info:
+        cloud: default
+        name: "vm-tagged-blocked-{{ idx }}"
+      register: vm_hosts
+      loop: "{{ hosts_to_fail }}"
+      loop_control:
+        index_var: idx
+
+    - name: 26 Assert VMs are still on original hosts
+      ansible.builtin.assert:
+        that:
+          - item.servers[0].hypervisor_hostname == hosts_to_fail[idx]
+        fail_msg: >
+          vm-tagged-blocked-{{ idx }} was evacuated despite threshold exceeded (75% > 50%).
+          Expected {{ hosts_to_fail[idx] }}, found {{ item.servers[0].hypervisor_hostname }}
+      loop: "{{ vm_hosts.results }}"
+      loop_control:
+        index_var: idx
+        label: "vm-tagged-blocked-{{ idx }}"
+
+    - name: 26 Check for ThresholdExceeded K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=ThresholdExceeded --no-headers 2>/dev/null | grep -c 'ThresholdExceeded' || echo 0
+      register: threshold_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: threshold_events.stdout | int > 0
+
+    - name: 26 Verify ThresholdExceeded event was emitted
+      ansible.builtin.debug:
+        msg: "Found {{ threshold_events.stdout }} ThresholdExceeded events"
+
+    - name: 26 Save logs
+      ansible.builtin.shell: oc -n openstack logs $(oc get pods -n openstack -l service=instanceha-0 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || oc get pods -n openstack -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep instanceha | head -1) > /home/zuul/26_threshold_tagged_aggregates.log
+      changed_when: false
+
+- name: 26 Restart compute-0, compute-1, compute-2 after test 2
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 26 Build list of compute VM names for libvirt
+      ansible.builtin.set_fact:
+        computes_to_restart:
+          - cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace', '\.ctlplane\.example\.com$', '') | first }}
+          - cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | map('regex_replace', '\.ctlplane\.example\.com$', '') | first }}
+          - cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | map('regex_replace', '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 26 Restart compute VMs on libvirt
+      community.libvirt.virt:
+        name: "{{ item }}"
+        state: running
+      loop: "{{ computes_to_restart }}"
+
+- name: 26 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "26-test-threshold-tagged-aggregates"
+
+  pre_tasks:
+    - name: 26 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 26 Set compute hostnames
+      ansible.builtin.set_fact:
+        compute_names: "{{ compute_details | map(attribute='hostname') | list }}"
+        hosts_to_recover:
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+
+    - name: 26 Set evacuable hosts for cleanup
+      ansible.builtin.set_fact:
+        evacuable_hosts:
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-2') | map(attribute='hostname') | first }}"
+          - "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-3') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 26 Delete test VMs
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: "{{ item }}"
+      loop:
+        - vm-tagged-threshold
+        - vm-tagged-blocked-0
+        - vm-tagged-blocked-1
+        - vm-tagged-blocked-2
+      ignore_errors: true
+
+    - name: 26 Remove evacuable hosts from aggregate
+      ansible.builtin.shell: |
+        openstack --os-cloud default aggregate remove host evacuable-agg {{ item }} 2>/dev/null || true
+      loop: "{{ evacuable_hosts }}"
+      changed_when: false
+
+    - name: 26 Delete evacuable aggregate
+      ansible.builtin.shell: |
+        openstack --os-cloud default aggregate delete evacuable-agg 2>/dev/null || true
+      changed_when: false
+
+    - name: 26 Enable and unset forced_down for crashed computes
+      ansible.builtin.shell: |
+        openstack --os-cloud default compute service set --enable --up {{ item }} nova-compute
+      loop: "{{ hosts_to_recover }}"
+      changed_when: false
+
+    - name: 26 Wait for crashed computes to be up
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ item }}"
+      register: compute_status
+      until: "'up' in compute_status.compute_services | map(attribute='state')"
+      retries: 24
+      delay: 10
+      loop: "{{ hosts_to_recover }}"
+
+    - name: 26 Wait for crashed computes to be enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+        host: "{{ item }}"
+      register: compute_status
+      until: "'enabled' in compute_status.compute_services | map(attribute='status')"
+      retries: 60
+      delay: 10
+      loop: "{{ hosts_to_recover }}"
+
+    - name: 26 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 26 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 26 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 26 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 26 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true
