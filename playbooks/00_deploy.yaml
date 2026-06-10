@@ -40,7 +40,7 @@
             'name': item.item | regex_replace('^cifmw-', ''),
             'agent': (idx == 1) | ternary('ipmi', 'redfish'),
             'ipaddr': '192.168.111.9',
-            'ipport': (idx == 1) | ternary('6231', (8000 + idx) | string),
+            'ipport': (idx == 1) | ternary('6231', '8000'),
             'login': 'admin',
             'passwd': 'password',
             'uuid': item.stdout
