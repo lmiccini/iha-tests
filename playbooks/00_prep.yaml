@@ -161,3 +161,41 @@
         path: /home/zuul/iha-tests-results
         state: directory
         mode: '0755'
+
+    - name: Fetch compute service info from OpenStack
+      openstack.cloud.compute_service_info:
+        cloud: default
+        binary: nova-compute
+      register: hypervisor_list
+
+    - name: Initialize compute details
+      ansible.builtin.set_fact:
+        compute_details: []
+
+    - name: Build compute details from service list
+      ansible.builtin.set_fact:
+        compute_details: >-
+          {{ compute_details + [{
+            'hostname': item.host,
+            'readable_hostname': item.host | regex_replace('compute-[^.-]+-(\\d+).*', 'compute-\\1'),
+            'state': item.state,
+            'status': item.status
+          }] }}
+      loop: "{{ hypervisor_list.compute_services }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Sort compute details by hostname
+      ansible.builtin.set_fact:
+        compute_details: "{{ compute_details | sort(attribute='hostname') }}"
+
+    - name: Save compute details to JSON file
+      ansible.builtin.copy:
+        content: "{{ compute_details | to_json }}"
+        dest: /tmp/compute_details.json
+
+    - name: Transfer compute details to Ansible controller
+      ansible.builtin.fetch:
+        src: /tmp/compute_details.json
+        dest: /tmp/compute_details.json
+        flat: true

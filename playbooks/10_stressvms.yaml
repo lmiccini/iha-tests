@@ -71,14 +71,16 @@
         msg: "The following compute VMs are still not running: {{ not_running_vms }}"
       when: not_running_vms | length > 0
 
-- name: 10 Generate detailed compute node information on the controller
+- name: 10 Create VMs after checking compute nodes are running
   hosts: controller-0
   remote_user: zuul
   gather_facts: false
+
   vars:
     name: "10-test-stress-vms"
+    num_stress_vms: "{{ number_stress_vms | default(1) | int }}"
 
-  tasks:
+  pre_tasks:
     - name: 10 Create results file (failure)
       ansible.builtin.template:
         src: templates/iha-tests-results.xml.j2
@@ -86,48 +88,8 @@
       vars:
         success: false
 
-    - name: 10 Fetch compute service (hypervisor) info from OpenStack
-      openstack.cloud.compute_service_info:
-        cloud: default
-      register: hypervisor_list
-
-    - name: 10 Reset compute_details variable
-      set_fact:
-        compute_details: []
-
-    - name: 10 Extract detailed information for nova-compute hypervisors
-      set_fact:
-        compute_details: "{{ compute_details | default([]) + [{'hostname': item.host, 'readable_hostname': (item.host | regex_replace('compute-[^.-]+-(\\d+).*', 'compute-\\1')), 'state': item.state, 'status': item.status}] }}"
-      loop: "{{ hypervisor_list.compute_services | selectattr('binary', 'equalto', 'nova-compute') }}"
-
-    - name: 10 Sort compute details by hostname
-      set_fact:
-        #compute_details: "{{ compute_details | unique(attribute='hostname') | sort(attribute='hostname') }}"
-        compute_details: "{{ compute_details | sort(attribute='hostname') }}"
-
-    - name: 10 Save compute details to JSON file on controller
-      copy:
-        content: "{{ compute_details | to_json }}"
-        dest: /tmp/compute_details.json
-        force: yes
-
-    - name: 10 Transfer JSON file from controller to localhost
-      fetch:
-        src: /tmp/compute_details.json
-        dest: /tmp/compute_details.json
-        flat: yes
-
-- name: 10 Create VMs after checking compute nodes are running
-  hosts: controller-0
-  remote_user: zuul
-  gather_facts: false
-
-  vars:
-    num_stress_vms: "{{ number_stress_vms | default(1) | int }}"
-
-  pre_tasks:
     - name: 10 Load and set compute details from JSON file as a fact
-      set_fact:
+      ansible.builtin.set_fact:
         compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
 
   tasks:

@@ -116,41 +116,6 @@
         src: /home/zuul/iha.yaml
         verify_ssl: false
 
-- name: 07 Generate detailed compute node information on the controller
-  hosts: controller-0
-  gather_facts: false
-
-  tasks:
-    - name: 07 Fetch compute service (hypervisor) info from OpenStack
-      openstack.cloud.compute_service_info:
-        cloud: default
-      register: hypervisor_list
-
-    - name: 07 Reset compute_details variable
-      ansible.builtin.set_fact:
-        compute_details: []
-
-    - name: 07 Extract detailed information for nova-compute hypervisors
-      ansible.builtin.set_fact:
-        compute_details: "{{ compute_details | default([]) + [{'hostname': item.host, 'readable_hostname': (item.host | regex_replace('compute-[^.-]+-(\\d+).*', 'compute-\\\
-          1')), 'state': item.state, 'status': item.status}] }}"
-      loop: "{{ hypervisor_list.compute_services | selectattr('binary', 'equalto', 'nova-compute') }}"
-
-    - name: 07 Sort compute details by hostname
-      ansible.builtin.set_fact:
-        compute_details: "{{ compute_details | sort(attribute='hostname') }}"
-
-    - name: 07 Save compute details to JSON file on controller
-      ansible.builtin.copy:
-        content: "{{ compute_details | to_json }}"
-        dest: /tmp/compute_details.json
-
-    - name: 07 Transfer JSON file from controller to controller-0
-      ansible.builtin.fetch:
-        src: /tmp/compute_details.json
-        dest: /tmp/compute_details.json
-        flat: true
-
 - name: 07 Delete all existing instances
   hosts: controller-0
   gather_facts: false
