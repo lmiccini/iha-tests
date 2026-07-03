@@ -681,21 +681,18 @@
     #############################################################################
     # TEST 4: Partial evacuation failure — reserved host NOT returned to pool
     # Validates the fix for returning reserved hosts that still have active VMs.
-    # Scenario: partially fill compute-1 (9000MB) leaving ~4170MB, and fill
-    # compute-2 (11000MB) leaving ~2170MB. Create 3 VMs on compute-0 using
-    # iha.evac-test (2500MB each). After crash, the first VM fits on compute-1
-    # but the second and third cannot fit on either compute-1 or compute-2.
+    # Scenario: partially fill compute-1 leaving room for exactly 1 evac VM,
+    # fill compute-2 leaving no room for evac VMs. Create 3 VMs on compute-0.
+    # After crash, the first VM fits on compute-1 but the second and third
+    # cannot fit on either compute-1 or compute-2.
     # compute-1 must stay enabled because a VM landed on it.
     #
-    # Resource math (from placement, allocation_ratio=1.0):
-    #   Allocatable per node = 13682 - 512(reserved) = 13170 MB
-    #   compute-1: after iha.partial-fill (9000MB) = 4170 MB remaining
-    #     VM1 (2500MB): 4170 >= 2500 -> success, 1670 remaining
-    #     VM2 (2500MB): 1670 < 2500  -> fail on compute-1
-    #     VM3 (2500MB): 1670 < 2500  -> fail on compute-1
-    #   compute-2: after iha.fill (11000MB) = 2170 MB remaining
-    #     VM2 fallback: 2170 < 2500  -> fail on compute-2 -> ERROR
-    #     VM3 fallback: 2170 < 2500  -> fail on compute-2 -> ERROR
+    # Flavor sizes are computed dynamically from placement allocatable memory:
+    #   evac_test_mb  = allocatable // 5
+    #   partial_fill_mb = allocatable - evac_test_mb - (evac_test_mb // 2)
+    #     -> leaves 1.5 * evac_test_mb free (1 VM fits, 2 don't)
+    #   fill_mb = allocatable - evac_test_mb + 1
+    #     -> leaves less than evac_test_mb free (no VM fits)
     #############################################################################
 
     - name: 17 TEST4 - Remove zone aggregates from TEST2/3
@@ -710,34 +707,53 @@
         - zone-b
       ignore_errors: true
 
-    - name: 17 TEST4 - Create partial-fill flavor (leaves ~4170MB on a node)
+    - name: 17 TEST4 - Query allocatable memory from placement
+      ansible.builtin.shell: |
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "{{ hostvars['controller-0']['compute1'] }}" | awk '{print $1}')
+        openstack --os-cloud default resource provider inventory list $rp_uuid -f json | \
+          python3 -c "import sys,json; inv=json.load(sys.stdin); mem=[r for r in inv if r['resource_class']=='MEMORY_MB'][0]; print(int(mem['total'] * mem['allocation_ratio']) - mem['reserved'])"
+      register: allocatable_result
+      changed_when: false
+
+    - name: 17 TEST4 - Compute dynamic flavor sizes
+      ansible.builtin.set_fact:
+        allocatable_mb: "{{ allocatable_result.stdout | int }}"
+        evac_test_mb: "{{ allocatable_result.stdout | int // 5 }}"
+        partial_fill_mb: "{{ allocatable_result.stdout | int - (allocatable_result.stdout | int // 5) - (allocatable_result.stdout | int // 10) }}"
+        fill_mb: "{{ allocatable_result.stdout | int - (allocatable_result.stdout | int // 5) + 1 }}"
+
+    - name: 17 TEST4 - Log computed flavor sizes
+      ansible.builtin.debug:
+        msg: "Allocatable: {{ allocatable_mb }} MB | partial-fill: {{ partial_fill_mb }} MB | evac-test: {{ evac_test_mb }} MB | fill: {{ fill_mb }} MB"
+
+    - name: 17 TEST4 - Create partial-fill flavor
       openstack.cloud.compute_flavor:
         cloud: default
         state: present
         name: iha.partial-fill
-        ram: 9000
+        ram: "{{ partial_fill_mb }}"
         vcpus: 1
         disk: 1
         extra_specs:
           hw_rng:allowed: "True"
 
-    - name: 17 TEST4 - Create evacuation test flavor (2500MB — only 1 fits in remaining space)
+    - name: 17 TEST4 - Create evacuation test flavor (only 1 fits in remaining space)
       openstack.cloud.compute_flavor:
         cloud: default
         state: present
         name: iha.evac-test
-        ram: 2500
+        ram: "{{ evac_test_mb }}"
         vcpus: 1
         disk: 1
         extra_specs:
           hw_rng:allowed: "True"
 
-    - name: 17 TEST4 - Create fill flavor (11000MB — blocks fallback on compute-2)
+    - name: 17 TEST4 - Create fill flavor (blocks fallback on other computes)
       openstack.cloud.compute_flavor:
         cloud: default
         state: present
         name: iha.fill
-        ram: 11000
+        ram: "{{ fill_mb }}"
         vcpus: 1
         disk: 1
         extra_specs:
@@ -837,7 +853,7 @@
       delay: 5
       changed_when: false
 
-    - name: 17 TEST4 - Partially fill compute-1 (9000MB, leaves ~4170MB for evacuees)
+    - name: 17 TEST4 - Partially fill compute-1 (leaves room for 1 evac VM)
       openstack.cloud.server:
         cloud: default
         auth:
@@ -853,7 +869,7 @@
         nics:
           - net-name: ihanet
 
-    - name: 17 TEST4 - Fill compute-2 (11000MB, leaves ~2170MB — blocks fallback)
+    - name: 17 TEST4 - Fill compute-2 (blocks fallback)
       openstack.cloud.server:
         cloud: default
         auth:

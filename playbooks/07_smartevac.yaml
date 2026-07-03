@@ -368,12 +368,25 @@
         compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
 
   tasks:
+    - name: 07 Query allocatable memory from placement
+      ansible.builtin.shell: |
+        compute1_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-1') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute1_hostname" | awk '{print $1}')
+        openstack --os-cloud default resource provider inventory list $rp_uuid -f json | \
+          python3 -c "import sys,json; inv=json.load(sys.stdin); mem=[r for r in inv if r['resource_class']=='MEMORY_MB'][0]; print(int(mem['total'] * mem['allocation_ratio']) - mem['reserved'])"
+      register: allocatable_result
+      changed_when: false
+
+    - name: 07 Compute dynamic fill flavor size
+      ansible.builtin.set_fact:
+        fill_mb: "{{ allocatable_result.stdout | int - 64 }}"
+
     - name: 07 Create fill flavor
       openstack.cloud.compute_flavor:
         cloud: default
         state: present
         name: fill
-        ram: 13096
+        ram: "{{ fill_mb }}"
         vcpus: 8
         disk: 1
         extra_specs:
