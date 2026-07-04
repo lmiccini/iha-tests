@@ -490,8 +490,8 @@
             duration_histogram_present:     {{ has_histogram }}
           Source: {{ prometheus_svc }}:{{ prometheus_port }}
 
-    - name: 25 Save logs
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/25_prometheus_metrics.log
+    - name: 25 Save logs to results
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
 - name: 25 Cleanup

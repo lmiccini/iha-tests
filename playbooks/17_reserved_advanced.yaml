@@ -1113,6 +1113,10 @@
       changed_when: false
       ignore_errors: true
 
+    - name: 17 Save logs to results
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
     #############################################################################
     # CLEANUP
     #############################################################################

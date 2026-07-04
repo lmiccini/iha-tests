@@ -525,8 +525,8 @@
             Disabled reason: {{ compute_0_service.compute_services[0].disabled_reason }}
             EvacuationFailed events: {{ evac_failed_events.stdout }}
 
-    - name: 21 Save logs
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/21_continue_on_failure.log
+    - name: 21 Save logs to results
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
 - name: 21 Restart compute-0

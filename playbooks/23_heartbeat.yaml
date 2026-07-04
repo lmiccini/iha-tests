@@ -349,8 +349,8 @@
       retries: 60
       delay: 10
 
-    - name: 23 Save logs
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/23_heartbeat.log
+    - name: 23 Save logs to results
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
 - name: 23 Cleanup

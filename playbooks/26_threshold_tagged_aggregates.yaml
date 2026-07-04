@@ -534,8 +534,8 @@
       ansible.builtin.debug:
         msg: "Found {{ threshold_events.stdout }} ThresholdExceeded events"
 
-    - name: 26 Save logs
-      ansible.builtin.shell: oc -n openstack logs $(oc get pods -n openstack -l service=instanceha-0 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || oc get pods -n openstack -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep instanceha | head -1) > /home/zuul/26_threshold_tagged_aggregates.log
+    - name: 26 Save logs to results
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
 - name: 26 Restart compute-0, compute-1, compute-2 after test 2
