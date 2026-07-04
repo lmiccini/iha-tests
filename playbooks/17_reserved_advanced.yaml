@@ -1110,7 +1110,7 @@
       ignore_errors: true
 
     - name: 17 Save logs to results
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/17-test-reserved-advanced.log
       changed_when: false
 
     #############################################################################

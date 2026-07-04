@@ -368,7 +368,7 @@
         fail_msg: "vm-retry2 should be in ERROR state on compute-0 — instanceha must attempt all VMs even when evacuations fail (status={{ vm2_info.servers[0].status }}, host={{ vm2_info.servers[0].hypervisor_hostname }})"
 
     - name: 20 Save logs to results
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/20-test-evacuation-retry.log
       changed_when: false
 
 - name: 20 Restart compute-0

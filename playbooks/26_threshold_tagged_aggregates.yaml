@@ -538,7 +538,7 @@
         msg: "Found {{ threshold_events.stdout }} ThresholdExceeded events"
 
     - name: 26 Save logs to results
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/26-test-threshold-tagged-aggregates.log
       changed_when: false
 
 - name: 26 Restart compute-0, compute-1, compute-2 after test 2

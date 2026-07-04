@@ -303,7 +303,7 @@
       delay: 5
 
     - name: 22 Save logs to results
-      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/22-test-reconciliation.log
       changed_when: false
 
 - name: 22 Cleanup
