@@ -247,7 +247,7 @@
       changed_when: false
       retries: 120
       delay: 5
-      until: hypervisor3.stdout not in hostvars['controller-0']['compute0']
+      until: hypervisor3.stdout | length > 0 and hypervisor3.stdout not in hostvars['controller-0']['compute0']
 
     - name: 09 Verify vm c1 was evacuated
       ansible.builtin.fail:

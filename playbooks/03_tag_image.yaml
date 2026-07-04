@@ -182,7 +182,7 @@
       changed_when: false
       retries: 180
       delay: 5
-      until: hypervisor2.stdout not in hostvars['controller-0']['compute0']
+      until: hypervisor2.stdout | length > 0 and hypervisor2.stdout not in hostvars['controller-0']['compute0']
 
     - name: 03 Fetch hypervisor for instance vm
       ansible.builtin.shell: |

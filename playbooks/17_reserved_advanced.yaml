@@ -312,7 +312,7 @@
       changed_when: false
       retries: 60
       delay: 5
-      until: vm1_host.stdout != hostvars['controller-0']['compute0']
+      until: vm1_host.stdout | length > 0 and vm1_host.stdout != hostvars['controller-0']['compute0']
 
     - name: 17 TEST1 - Verify vm1 was evacuated to compute-1 (reserved host in same aggregate)
       ansible.builtin.assert:
@@ -518,7 +518,7 @@
       changed_when: false
       retries: 60
       delay: 5
-      until: vm2_host.stdout != hostvars['controller-0']['compute0']
+      until: vm2_host.stdout | length > 0 and vm2_host.stdout != hostvars['controller-0']['compute0']
 
     - name: 17 TEST2 - Verify vm2 was evacuated to compute-1 (reserved host in same zone)
       ansible.builtin.assert:
@@ -635,7 +635,7 @@
       changed_when: false
       retries: 60
       delay: 5
-      until: vm3_host.stdout != hostvars['controller-0']['compute0']
+      until: vm3_host.stdout | length > 0 and vm3_host.stdout != hostvars['controller-0']['compute0']
 
     - name: 17 TEST3 - Verify vm3 was evacuated (but not necessarily to compute-2)
       ansible.builtin.assert:

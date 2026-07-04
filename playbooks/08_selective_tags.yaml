@@ -207,7 +207,7 @@
       register: hypervisor2
       retries: 180
       delay: 5
-      until: hypervisor2.stdout not in hostvars['controller-0']['compute0']
+      until: hypervisor2.stdout | length > 0 and hypervisor2.stdout not in hostvars['controller-0']['compute0']
       changed_when: false
 
     - name: 08 Fetch hypervisor for vm-imageha
@@ -399,7 +399,7 @@
       register: hypervisor2
       retries: 180
       delay: 5
-      until: hypervisor2.stdout not in hostvars['controller-0']['compute1']
+      until: hypervisor2.stdout | length > 0 and hypervisor2.stdout not in hostvars['controller-0']['compute1']
       changed_when: false
 
     - name: 08 Fetch hypervisor for vm-imageha
@@ -589,7 +589,7 @@
       register: hypervisor2
       retries: 180
       delay: 5
-      until: hypervisor2.stdout not in hostvars['controller-0']['compute0']
+      until: hypervisor2.stdout | length > 0 and hypervisor2.stdout not in hostvars['controller-0']['compute0']
       changed_when: false
 
     - name: 08 Fetch hypervisor for vm-imageha
