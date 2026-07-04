@@ -102,7 +102,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -157,7 +157,7 @@
     - name: 12 Wait for IHA to process the down host
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=50 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 

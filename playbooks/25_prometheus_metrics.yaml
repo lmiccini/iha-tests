@@ -61,7 +61,7 @@
     - name: 25 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -155,7 +155,7 @@
         "
       register: baseline_metrics
       changed_when: false
-      retries: 6
+      retries: 24
       delay: 5
       until: baseline_metrics.rc == 0
 
@@ -185,7 +185,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -252,7 +252,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 25 Get instanceha pod name

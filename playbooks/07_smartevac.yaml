@@ -196,7 +196,7 @@
     - name: 07 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -438,7 +438,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 

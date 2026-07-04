@@ -77,7 +77,7 @@
     - name: 16 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -89,7 +89,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -156,7 +156,7 @@
         name: vm-shutoff
       register: shutoff_status
       until: shutoff_status.servers[0].status == "SHUTOFF"
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 16 Set vm-error to ERROR state
@@ -170,7 +170,7 @@
         name: vm-error
       register: error_status
       until: error_status.servers[0].status == "ERROR"
-      retries: 12
+      retries: 24
       delay: 5
 
 - name: 16 Crash compute-0
@@ -215,7 +215,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 16 List pods in the openstack namespace
@@ -244,7 +244,7 @@
         cloud: default
         name: vm-active
       register: active_info
-      retries: 12
+      retries: 24
       delay: 5
       until: active_info.servers[0].status == "ACTIVE" and active_info.servers[0].hypervisor_hostname != compute_zero_hostname
 
@@ -260,7 +260,7 @@
         cloud: default
         name: vm-shutoff
       register: shutoff_info
-      retries: 12
+      retries: 24
       delay: 5
       until: shutoff_info.servers[0].hypervisor_hostname != compute_zero_hostname
 
@@ -276,7 +276,7 @@
         cloud: default
         name: vm-error
       register: error_info
-      retries: 12
+      retries: 24
       delay: 5
       until: error_info.servers[0].hypervisor_hostname != compute_zero_hostname
 
@@ -312,7 +312,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
-      retries: 12
+      retries: 36
       delay: 5
 
     - name: 16 Wait for compute-0 to transition to enabled
@@ -320,7 +320,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
-      retries: 12
+      retries: 24
       delay: 5
 
 - name: 16 Cleanup

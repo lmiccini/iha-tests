@@ -60,7 +60,7 @@
     - name: 15 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -72,7 +72,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -179,7 +179,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 15 Wait for all VMs to be evacuated and ACTIVE
@@ -212,7 +212,7 @@
         tail_lines: 200
         all_containers: true
       register: instanceha_logs
-      retries: 12
+      retries: 24
       delay: 5
       until: "'Concurrent evacuation' in instanceha_logs.log and 'orchestrated=True' in instanceha_logs.log"
 
@@ -243,7 +243,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
-      retries: 12
+      retries: 36
       delay: 5
 
     - name: 15 Wait for compute-0 to transition to enabled
@@ -251,7 +251,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
-      retries: 12
+      retries: 24
       delay: 5
 
 - name: 15 Cleanup

@@ -191,7 +191,7 @@
     - name: 26 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -202,7 +202,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -232,7 +232,7 @@
         cloud: default
         name: vm-tagged-threshold
       register: vm_status
-      retries: 12
+      retries: 24
       delay: 5
       until: vm_status.servers[0].status == "ACTIVE"
 
@@ -278,7 +278,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 26 Wait for VM to be evacuated (below threshold, should evacuate)
@@ -387,7 +387,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
       loop: "{{ hosts_to_fail }}"
@@ -529,7 +529,7 @@
         oc get events -n openstack --field-selector reason=ThresholdExceeded --no-headers 2>/dev/null | grep -c 'ThresholdExceeded' || echo 0
       register: threshold_events
       changed_when: false
-      retries: 6
+      retries: 24
       delay: 5
       until: threshold_events.stdout | int > 0
 

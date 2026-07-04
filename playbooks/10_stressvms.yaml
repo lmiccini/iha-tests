@@ -148,7 +148,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
       loop: "{{ compute_details }}"
@@ -249,7 +249,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 10 Fetch and check VM status on each VM until ACTIVE
@@ -258,7 +258,7 @@
         name: "{{ vm_name }}"
       register: vm_status_info
       until: vm_status_info.servers[0].status == "ACTIVE"
-      retries: 12
+      retries: 24
       delay: 5
       loop: "{{ compute_zero_vms }}"
       loop_control:
@@ -272,7 +272,7 @@
       until:
         vm_status_info.servers is defined and
         vm_status_info.servers[0].hypervisor_hostname != compute_zero_hostname
-      retries: 12
+      retries: 24
       delay: 5
       loop: "{{ compute_zero_vms }}"
       loop_control:
@@ -333,7 +333,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 10 save logs

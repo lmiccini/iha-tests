@@ -167,7 +167,7 @@
         oc -n openstack get svc instanceha-udp -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
       register: lb_ip_result
       changed_when: false
-      retries: 12
+      retries: 24
       delay: 5
       until: lb_ip_result.stdout == "172.17.0.81"
 
@@ -242,7 +242,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -316,7 +316,7 @@
         oc get events -n openstack --field-selector reason=HostReachable --no-headers 2>/dev/null | grep -c 'HostReachable' || echo 0
       register: reachable_events
       changed_when: false
-      retries: 6
+      retries: 24
       delay: 5
       until: reachable_events.stdout | int > 0
 

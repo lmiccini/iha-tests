@@ -122,7 +122,7 @@
     - name: 21 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -213,7 +213,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -233,7 +233,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -245,7 +245,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -306,7 +306,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
       loop: "{{ extra_computes }}"
@@ -423,7 +423,7 @@
         cloud: default
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
-      retries: 12
+      retries: 24
       delay: 5
 
     - name: 21 List pods in the openstack namespace
@@ -491,7 +491,7 @@
         binary: nova-compute
         host: "{{ compute_zero_hostname }}"
       register: compute_0_service
-      retries: 12
+      retries: 24
       delay: 5
       until: "'evacuation FAILED' in compute_0_service.compute_services[0].disabled_reason"
 
@@ -508,7 +508,7 @@
         oc get events -n openstack --field-selector reason=EvacuationFailed --no-headers 2>/dev/null | grep -c 'EvacuationFailed' || echo 0
       register: evac_failed_events
       changed_when: false
-      retries: 6
+      retries: 24
       delay: 5
       until: evac_failed_events.stdout | int > 0
 

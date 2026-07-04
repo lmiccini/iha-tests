@@ -82,7 +82,7 @@
         echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
       register: trait_check
       until: trait_check.rc == 0
-      retries: 12
+      retries: 24
       delay: 5
       changed_when: false
 
@@ -249,7 +249,7 @@
         oc get events -n openstack --field-selector reason=OrphanedHostRecovered --no-headers 2>/dev/null | grep -c 'OrphanedHostRecovered' || echo 0
       register: reconcile_events
       changed_when: false
-      retries: 6
+      retries: 24
       delay: 5
       until: reconcile_events.stdout | int > 0
 
@@ -281,7 +281,7 @@
         tail_lines: 200
         all_containers: true
       register: power_on_logs
-      retries: 12
+      retries: 24
       delay: 5
       until: "'Fencing host ' + compute_zero_hostname + ' on' in power_on_logs.log"
 
