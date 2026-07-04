@@ -83,7 +83,7 @@
       register: healthz_result
       changed_when: false
       retries: 6
-      delay: 10
+      delay: 5
       until: "'status=200' in healthz_result.stdout"
 
     - name: 19 Assert healthz returned 200

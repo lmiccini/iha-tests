@@ -57,9 +57,12 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    - name: 14 Wait for config reload
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 14 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 14 Wait for compute-0 resource provider to be available in placement
       ansible.builtin.shell: |
@@ -132,7 +135,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 14 List pods in the openstack namespace
       kubernetes.core.k8s_info:
@@ -152,7 +155,7 @@
         all_containers: true
       register: instanceha_logs
       retries: 30
-      delay: 10
+      delay: 5
       until: "'exceeds threshold' in instanceha_logs.log and 'Not evacuating' in instanceha_logs.log"
 
     - name: 14 Verify VM was NOT evacuated (still on compute-0)
@@ -235,7 +238,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 14 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -245,7 +248,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 14 save logs
       ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log

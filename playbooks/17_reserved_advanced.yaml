@@ -84,7 +84,7 @@
       register: all_services
       until: all_services.compute_services | rejectattr('state', 'equalto', 'up') | list | length == 0
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 17 Pre-cleanup - Remove leftover VMs
       openstack.cloud.server:
@@ -284,7 +284,7 @@
       register: vm1_status
       changed_when: false
       retries: 30
-      delay: 10
+      delay: 5
       until: vm1_status.stdout == "ACTIVE"
 
 - name: 17 TEST1 - Crash compute-0
@@ -311,7 +311,7 @@
       register: vm1_host
       changed_when: false
       retries: 60
-      delay: 10
+      delay: 5
       until: vm1_host.stdout != hostvars['controller-0']['compute0']
 
     - name: 17 TEST1 - Verify vm1 was evacuated to compute-1 (reserved host in same aggregate)
@@ -439,7 +439,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST2 - Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -449,7 +449,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST2 - Wait compute-1 to be enabled
       openstack.cloud.compute_service_info:
@@ -459,7 +459,7 @@
       register: compute_1_status
       until: "'enabled' in compute_1_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST2 - Wait for compute-0 resource provider to be available in placement (after restart)
       ansible.builtin.shell: |
@@ -517,7 +517,7 @@
       register: vm2_host
       changed_when: false
       retries: 60
-      delay: 10
+      delay: 5
       until: vm2_host.stdout != hostvars['controller-0']['compute0']
 
     - name: 17 TEST2 - Verify vm2 was evacuated to compute-1 (reserved host in same zone)
@@ -571,7 +571,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST3 - Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -581,7 +581,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST3 - Wait for compute-0 resource provider to be available in placement (after restart)
       ansible.builtin.shell: |
@@ -634,7 +634,7 @@
       register: vm3_host
       changed_when: false
       retries: 60
-      delay: 10
+      delay: 5
       until: vm3_host.stdout != hostvars['controller-0']['compute0']
 
     - name: 17 TEST3 - Verify vm3 was evacuated (but not necessarily to compute-2)
@@ -804,7 +804,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST4 - Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -814,7 +814,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST4 - Wait compute-1 to be enabled
       openstack.cloud.compute_service_info:
@@ -824,7 +824,7 @@
       register: compute_1_status
       until: "'enabled' in compute_1_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 TEST4 - Enable compute-2
       ansible.builtin.shell: |
@@ -998,7 +998,7 @@
       register: vm_status
       changed_when: false
       retries: 30
-      delay: 10
+      delay: 5
       until: vm_status.stdout == "ACTIVE"
       loop:
         - vm4a
@@ -1023,17 +1023,13 @@
   gather_facts: false
 
   tasks:
-    - name: 17 TEST4 - Wait for IHA to process evacuation (allow time for partial success + failure)
-      ansible.builtin.pause:
-        minutes: 3
-
     - name: 17 TEST4 - Check IHA logs for partial evacuation handling
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 | grep -i "Not returning reserved host" || echo "NOT_FOUND"
       register: logs_not_returning
       changed_when: false
       retries: 30
-      delay: 10
+      delay: 5
       until: "'NOT_FOUND' not in logs_not_returning.stdout"
 
     - name: 17 TEST4 - Verify 'Not returning reserved host' log entry exists
@@ -1179,7 +1175,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -1189,7 +1185,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 Wait compute-1 to be enabled
       openstack.cloud.compute_service_info:
@@ -1199,7 +1195,7 @@
       register: compute_1_status
       until: "'enabled' in compute_1_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 Wait compute-2 to be enabled
       openstack.cloud.compute_service_info:
@@ -1209,7 +1205,7 @@
       register: compute_2_status
       until: "'enabled' in compute_2_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 17 Reset IHA configmap to defaults
       ansible.builtin.template:

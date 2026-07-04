@@ -158,7 +158,7 @@
       register: hypervisor_vm_ha
       changed_when: false
       retries: 60
-      delay: 10
+      delay: 5
       until: "hypervisor_vm_ha.stdout not in hostvars['controller-0']['compute0']"
 
     - name: 13 Fetch hypervisor for skip-me-vm
@@ -237,7 +237,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 13 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -247,11 +247,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
-
-    - name: sleep 60
-      ansible.builtin.pause:
-        minutes: 1
+      delay: 5
 
     - name: 13 save logs
       ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log

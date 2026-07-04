@@ -58,9 +58,12 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    - name: 25 Wait for config reload
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 25 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 25 Verify ScrapeConfig telemetry-instanceha exists
       ansible.builtin.shell: |
@@ -122,7 +125,7 @@
       register: prom_discovery
       changed_when: false
       retries: 30
-      delay: 10
+      delay: 5
       until: prom_discovery.rc == 0
 
     - name: 25 Query baseline metrics from prometheus-metric-storage
@@ -153,7 +156,7 @@
       register: baseline_metrics
       changed_when: false
       retries: 6
-      delay: 10
+      delay: 5
       until: baseline_metrics.rc == 0
 
     - name: 25 Assert prometheus-metric-storage is serving instanceha metrics
@@ -250,7 +253,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 25 Get instanceha pod name
       ansible.builtin.shell: |
@@ -269,7 +272,7 @@
         name: vm-metrics
       register: vm_info
       retries: 60
-      delay: 10
+      delay: 5
       until:
         - vm_info.servers | length > 0
         - vm_info.servers[0].status == "ACTIVE"
@@ -294,7 +297,7 @@
         - "'up' in compute_0_status.compute_services | map(attribute='state')"
         - "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 25 Reload baseline values from first play
       ansible.builtin.set_fact:
@@ -332,7 +335,7 @@
       register: prom_reenabled_wait
       changed_when: false
       retries: 30
-      delay: 10
+      delay: 5
       until: prom_reenabled_wait.rc == 0
 
     - name: 25 Query post-evacuation metrics from prometheus-metric-storage

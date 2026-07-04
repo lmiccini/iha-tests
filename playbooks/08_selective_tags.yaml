@@ -149,7 +149,7 @@
       register: trait_check
       until: trait_check.rc == 0
       retries: 24
-      delay: 10
+      delay: 5
       changed_when: false
 
     - name: 08 Create instance vm
@@ -206,7 +206,7 @@
         openstack --os-cloud default server show vm-imageha  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
       register: hypervisor2
       retries: 180
-      delay: 10
+      delay: 5
       until: hypervisor2.stdout not in hostvars['controller-0']['compute0']
       changed_when: false
 
@@ -288,7 +288,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 36
-      delay: 10
+      delay: 5
 
     - name: 08 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -298,7 +298,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 180
-      delay: 10
+      delay: 5
 
     - name: 08 save logs
       ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
@@ -317,9 +317,12 @@
         oc -n openstack apply -f /home/zuul/iha-cm.yaml
       changed_when: false
 
-    - name: sleep
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 08 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 08 Wait vm-flavorha is absent before recreate
       ansible.builtin.shell: |
@@ -395,7 +398,7 @@
         openstack --os-cloud default server show vm-imageha  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
       register: hypervisor2
       retries: 180
-      delay: 10
+      delay: 5
       until: hypervisor2.stdout not in hostvars['controller-0']['compute1']
       changed_when: false
 
@@ -472,7 +475,7 @@
       register: compute_1_status
       until: "'up' in compute_1_status.compute_services | map(attribute='state')"
       retries: 36
-      delay: 10
+      delay: 5
 
     - name: 08 Wait compute-1 to be enabled
       openstack.cloud.compute_service_info:
@@ -482,7 +485,7 @@
       register: compute_1_status
       until: "'enabled' in compute_1_status.compute_services | map(attribute='status')"
       retries: 180
-      delay: 10
+      delay: 5
 
     - name: 08 save logs
       ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
@@ -585,7 +588,7 @@
         openstack --os-cloud default server show vm-flavorha  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
       register: hypervisor2
       retries: 180
-      delay: 10
+      delay: 5
       until: hypervisor2.stdout not in hostvars['controller-0']['compute0']
       changed_when: false
 
@@ -662,7 +665,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 36
-      delay: 10
+      delay: 5
 
     - name: 08 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -672,11 +675,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 180
-      delay: 10
-
-    - name: sleep
-      ansible.builtin.pause:
-        minutes: 1
+      delay: 5
 
     - name: 08 save logs
       ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log

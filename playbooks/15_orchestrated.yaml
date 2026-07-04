@@ -57,9 +57,12 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    - name: 15 Wait for config reload
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 15 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 15 Wait for compute-0 resource provider to be available in placement
       ansible.builtin.shell: |
@@ -177,7 +180,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 15 Wait for all VMs to be evacuated and ACTIVE
       openstack.cloud.server_info:
@@ -186,7 +189,7 @@
       register: vm_status
       until: vm_status.servers[0].status == "ACTIVE" and vm_status.servers[0].hypervisor_hostname != compute_zero_hostname
       retries: 30
-      delay: 10
+      delay: 5
       loop:
         - vm-web
         - vm-app
@@ -210,7 +213,7 @@
         all_containers: true
       register: instanceha_logs
       retries: 12
-      delay: 10
+      delay: 5
       until: "'Concurrent evacuation' in instanceha_logs.log and 'orchestrated=True' in instanceha_logs.log"
 
     - name: 15 Wait for all evacuation phases to complete
@@ -221,7 +224,7 @@
         all_containers: true
       register: phase_logs
       retries: 30
-      delay: 10
+      delay: 5
       until:
         - "'Evacuation phase 1/' in phase_logs.log"
         - "'Evacuation phase 2/' in phase_logs.log"
@@ -241,7 +244,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 15 Wait for compute-0 to transition to enabled
       openstack.cloud.compute_service_info:
@@ -249,7 +252,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
       retries: 12
-      delay: 10
+      delay: 5
 
 - name: 15 Cleanup
   hosts: controller-0

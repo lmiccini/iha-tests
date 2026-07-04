@@ -275,7 +275,7 @@
       register: svc_status
       until: "'down' in svc_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 23 Wait for IHA to detect down host and check heartbeat
       ansible.builtin.pause:
@@ -287,7 +287,7 @@
       register: instanceha_logs
       changed_when: false
       retries: 30
-      delay: 10
+      delay: 5
       until: "'skipping fencing' in instanceha_logs.stdout and 'heartbeat received' in instanceha_logs.stdout"
 
     - name: 23 Assert heartbeat-based skip message found
@@ -337,7 +337,7 @@
       register: svc_status
       until: "'up' in svc_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 23 Wait for compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -347,7 +347,7 @@
       register: svc_status
       until: "'enabled' in svc_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 23 Save logs to results
       ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log

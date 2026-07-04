@@ -150,7 +150,7 @@
       register: all_services
       until: all_services.compute_services | rejectattr('state', 'equalto', 'up') | list | length == 0
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 26 Create evacuable aggregate
       ansible.builtin.shell: |
@@ -188,9 +188,12 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    - name: 26 Wait for config reload
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 26 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 26 Wait for compute-0 resource provider to be available in placement
       ansible.builtin.shell: |
@@ -230,7 +233,7 @@
         name: vm-tagged-threshold
       register: vm_status
       retries: 12
-      delay: 10
+      delay: 5
       until: vm_status.servers[0].status == "ACTIVE"
 
 - name: 26 Crash compute-0 for test 1
@@ -276,7 +279,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 26 Wait for VM to be evacuated (below threshold, should evacuate)
       openstack.cloud.server_info:
@@ -284,7 +287,7 @@
         name: vm-tagged-threshold
       register: vm_evac
       retries: 60
-      delay: 10
+      delay: 5
       until:
         - vm_evac.servers[0].status == "ACTIVE"
         - vm_evac.servers[0].hypervisor_hostname != compute_zero_hostname
@@ -367,7 +370,7 @@
         - "'up' in compute_0_status.compute_services | map(attribute='state')"
         - "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 26 Wait before test 2
       ansible.builtin.pause:
@@ -497,7 +500,7 @@
         all_containers: true
       register: instanceha_logs
       retries: 30
-      delay: 10
+      delay: 5
       until: "'exceeds threshold' in instanceha_logs.log and 'Not evacuating' in instanceha_logs.log"
 
     - name: 26 Verify VMs were NOT evacuated
@@ -632,7 +635,7 @@
       register: compute_status
       until: "'up' in compute_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
       loop: "{{ hosts_to_recover }}"
 
     - name: 26 Wait for crashed computes to be enabled
@@ -643,7 +646,7 @@
       register: compute_status
       until: "'enabled' in compute_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
       loop: "{{ hosts_to_recover }}"
 
     - name: 26 Reset iha configmap

@@ -100,7 +100,7 @@
       register: all_services
       until: all_services.compute_services | rejectattr('state', 'equalto', 'up') | list | length == 0
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 20 Enable smart evacuation
       ansible.builtin.template:
@@ -119,9 +119,12 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    - name: 20 Wait for config reload
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 20 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 20 Delete all existing instances
       openstack.cloud.server_info:
@@ -215,7 +218,7 @@
       register: vm_creation_result
       until: vm_creation_result.finished
       retries: 10
-      delay: 10
+      delay: 5
       loop: "{{ vm_creation_tasks.results }}"
       loop_control:
         pause: 1
@@ -295,7 +298,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 20 List pods in the openstack namespace
       kubernetes.core.k8s_info:
@@ -315,7 +318,7 @@
         all_containers: true
       register: instanceha_logs
       retries: 60
-      delay: 10
+      delay: 5
       until: "'Giving up' in instanceha_logs.log or 'Failed evacuating' in instanceha_logs.log"
 
     - name: 20 Verify retry attempts were logged
@@ -456,7 +459,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 20 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -466,7 +469,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 20 Reset iha configmap
       ansible.builtin.template:

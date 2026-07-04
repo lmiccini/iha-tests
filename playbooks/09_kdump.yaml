@@ -193,7 +193,7 @@
       register: trait_check
       until: trait_check.rc == 0
       retries: 24
-      delay: 10
+      delay: 5
       changed_when: false
 
     - name: 99 Wait for compute-1 resource provider to be available in placement
@@ -204,7 +204,7 @@
       register: trait_check
       until: trait_check.rc == 0
       retries: 24
-      delay: 10
+      delay: 5
       changed_when: false
 
     - name: 09 Create instance c1
@@ -234,23 +234,22 @@
         virsh send-key $(virsh list |grep compute |awk '{print $2}' |grep '\-0$') KEY_LEFTALT KEY_SYSRQ KEY_C
       changed_when: false
 
-    - name: 09 Wait evacuation
-      ansible.builtin.pause:
-        minutes: 8
-
 - name: 09 Check evacuation
   hosts: controller-0
   gather_facts: false
   vars:
     name: "09-test-kdump-before-evacuation"
   tasks:
-    - name: 09 Fetch HYPERVISOR2 for instance c1
+    - name: 09 Wait for VM c1 to be evacuated from compute-0
       ansible.builtin.shell: |
-        openstack --os-cloud default server show c1  |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
+        openstack --os-cloud default server show c1 |grep 'OS-EXT-SRV-ATTR:host ' |awk '{print $4}' |sed 's/\..*$//'
       register: hypervisor3
       changed_when: false
+      retries: 120
+      delay: 5
+      until: hypervisor3.stdout not in hostvars['controller-0']['compute0']
 
-    - name: 09 Check if vm c1 was evacuated
+    - name: 09 Verify vm c1 was evacuated
       ansible.builtin.fail:
         msg: "vm c1 not evacuated, this should not happen"
       when: hypervisor3.stdout in hostvars['controller-0']['compute0']
@@ -268,7 +267,7 @@
       register: logs
       changed_when: false
       retries: 180
-      delay: 10
+      delay: 5
       until: "'are kdumping' in logs.stdout or 'fenced via kdump' in logs.stdout"
 
 #    - name: 09 fail if we did not see any kdump msg
@@ -296,7 +295,7 @@
       register: compute_0_status
       until: "'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 180
-      delay: 10
+      delay: 5
 
     - name: 09 Wait compute-0 to be enabled
       openstack.cloud.compute_service_info:
@@ -306,7 +305,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status')"
       retries: 180
-      delay: 10
+      delay: 5
 
     - name: 09 Wait compute-1 to be up
       openstack.cloud.compute_service_info:
@@ -316,7 +315,7 @@
       register: compute_1_status
       until: "'up' in compute_1_status.compute_services | map(attribute='state')"
       retries: 180
-      delay: 10
+      delay: 5
 
     - name: 09 Wait compute-1 to be enabled
       openstack.cloud.compute_service_info:
@@ -326,7 +325,7 @@
       register: compute_1_status
       until: "'enabled' in compute_1_status.compute_services | map(attribute='status')"
       retries: 180
-      delay: 10
+      delay: 5
 
     - name: 09 Cleanup kdump.conf on compute-0
       ansible.builtin.shell: |

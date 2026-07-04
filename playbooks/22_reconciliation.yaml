@@ -166,7 +166,7 @@
       register: svc_status
       until: "'down' in svc_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 22 Set compute-0 as forced_down (simulating IHA fenced it before crashing)
       ansible.builtin.shell: |
@@ -229,7 +229,7 @@
         all_containers: true
       register: instanceha_logs
       retries: 30
-      delay: 10
+      delay: 5
       until: "'Recovered orphaned fenced host' in instanceha_logs.log"
 
     - name: 22 Assert reconciliation message found
@@ -264,7 +264,7 @@
       register: vm_status
       until: vm_status.servers[0].status == "ACTIVE" and vm_status.servers[0].hypervisor_hostname != compute_zero_hostname
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 22 Assert VM was evacuated to another host
       ansible.builtin.assert:
@@ -282,7 +282,7 @@
         all_containers: true
       register: power_on_logs
       retries: 12
-      delay: 10
+      delay: 5
       until: "'Fencing host ' + compute_zero_hostname + ' on' in power_on_logs.log"
 
     - name: 22 Assert power-on fencing was performed
@@ -300,7 +300,7 @@
       register: svc_status
       until: "'up' in svc_status.compute_services | map(attribute='state')"
       retries: 24
-      delay: 10
+      delay: 5
 
     - name: 22 Save logs to results
       ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
@@ -340,7 +340,7 @@
       register: compute_0_status
       until: "'enabled' in compute_0_status.compute_services | map(attribute='status') and 'up' in compute_0_status.compute_services | map(attribute='state')"
       retries: 60
-      delay: 10
+      delay: 5
 
     - name: 22 Reset iha configmap
       ansible.builtin.template:

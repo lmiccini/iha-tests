@@ -74,9 +74,12 @@
         oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
       changed_when: false
 
-    - name: 16 Wait for config reload
-      ansible.builtin.pause:
-        minutes: 1
+    - name: 16 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      retries: 12
+      delay: 5
+      changed_when: false
 
     - name: 16 Wait for compute-0 resource provider to be available in placement
       ansible.builtin.shell: |
@@ -213,7 +216,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 16 List pods in the openstack namespace
       kubernetes.core.k8s_info:
@@ -233,7 +236,7 @@
         all_containers: true
       register: instanceha_logs
       retries: 30
-      delay: 10
+      delay: 5
       until: "'completed successfully' in instanceha_logs.log or 'evacuated successfully' in instanceha_logs.log"
 
     - name: 16 Verify vm-active is ACTIVE on another host
@@ -242,7 +245,7 @@
         name: vm-active
       register: active_info
       retries: 12
-      delay: 10
+      delay: 5
       until: active_info.servers[0].status == "ACTIVE" and active_info.servers[0].hypervisor_hostname != compute_zero_hostname
 
     - name: 16 Assert vm-active is ACTIVE
@@ -258,7 +261,7 @@
         name: vm-shutoff
       register: shutoff_info
       retries: 12
-      delay: 10
+      delay: 5
       until: shutoff_info.servers[0].hypervisor_hostname != compute_zero_hostname
 
     - name: 16 Assert vm-shutoff preserved SHUTOFF state
@@ -274,7 +277,7 @@
         name: vm-error
       register: error_info
       retries: 12
-      delay: 10
+      delay: 5
       until: error_info.servers[0].hypervisor_hostname != compute_zero_hostname
 
     - name: 16 Assert vm-error preserved ERROR state
@@ -310,7 +313,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
       retries: 12
-      delay: 10
+      delay: 5
 
     - name: 16 Wait for compute-0 to transition to enabled
       openstack.cloud.compute_service_info:
@@ -318,7 +321,7 @@
       register: hypervisor_list
       until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
       retries: 12
-      delay: 10
+      delay: 5
 
 - name: 16 Cleanup
   hosts: controller-0
