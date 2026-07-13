@@ -16,13 +16,13 @@
 
 - import_playbook: 00_deploy.yaml
 - import_playbook: 00_prep.yaml
-#- import_playbook: 01_disabled.yaml
-#- import_playbook: 02_tag_flavor.yaml
-#- import_playbook: 03_tag_image.yaml
-#- import_playbook: 04_tag_aggregate.yaml
-#- import_playbook: 05_leave_disabled.yaml
-#- import_playbook: 06_reserved.yaml
-#- import_playbook: 07_smartevac.yaml
+- import_playbook: 01_disabled.yaml
+- import_playbook: 02_tag_flavor.yaml
+- import_playbook: 03_tag_image.yaml
+- import_playbook: 04_tag_aggregate.yaml
+- import_playbook: 05_leave_disabled.yaml
+- import_playbook: 06_reserved.yaml
+- import_playbook: 07_smartevac.yaml
 - import_playbook: 08_selective_tags.yaml
 - import_playbook: 10_stressvms.yaml
 - import_playbook: 12_maintenance.yaml
