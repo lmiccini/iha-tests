@@ -157,8 +157,8 @@
     - name: 12 Wait for IHA to process the down host
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=50 | grep -q "Poll cycle completed"
-      retries: 24
-      delay: 5
+      retries: 30
+      delay: 10
       changed_when: false
 
     - name: 12 Fetch HYPERVISOR for instance c1

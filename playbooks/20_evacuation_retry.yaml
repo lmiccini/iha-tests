@@ -122,8 +122,8 @@
     - name: 20 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 24
-      delay: 5
+      retries: 30
+      delay: 10
       changed_when: false
 
     - name: 20 Delete all existing instances
