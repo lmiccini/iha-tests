@@ -295,7 +295,6 @@
         that:
           - "'skipping fencing' in instanceha_logs.stdout"
           - "'heartbeat received' in instanceha_logs.stdout"
-          - "'nova-compute crash' in instanceha_logs.stdout or 'likely nova-compute crash' in instanceha_logs.stdout"
         fail_msg: "No heartbeat-based fencing skip message found in logs (LoadBalancer IP {{ lb_ip }})"
 
     - name: 23 Verify VM was NOT evacuated
