@@ -17,30 +17,55 @@
 - import_playbook: 00_deploy.yaml
 - import_playbook: 00_prep.yaml
 - import_playbook: 01_disabled.yaml
+  when: (run_tests is not defined or '01_disabled' in run_tests) and (skip_tests is not defined or '01_disabled' not in skip_tests)
 - import_playbook: 02_tag_flavor.yaml
+  when: (run_tests is not defined or '02_tag_flavor' in run_tests) and (skip_tests is not defined or '02_tag_flavor' not in skip_tests)
 - import_playbook: 03_tag_image.yaml
+  when: (run_tests is not defined or '03_tag_image' in run_tests) and (skip_tests is not defined or '03_tag_image' not in skip_tests)
 - import_playbook: 04_tag_aggregate.yaml
+  when: (run_tests is not defined or '04_tag_aggregate' in run_tests) and (skip_tests is not defined or '04_tag_aggregate' not in skip_tests)
 - import_playbook: 05_leave_disabled.yaml
+  when: (run_tests is not defined or '05_leave_disabled' in run_tests) and (skip_tests is not defined or '05_leave_disabled' not in skip_tests)
 - import_playbook: 06_reserved.yaml
+  when: (run_tests is not defined or '06_reserved' in run_tests) and (skip_tests is not defined or '06_reserved' not in skip_tests)
 - import_playbook: 07_smartevac.yaml
+  when: (run_tests is not defined or '07_smartevac' in run_tests) and (skip_tests is not defined or '07_smartevac' not in skip_tests)
 - import_playbook: 08_selective_tags.yaml
+  when: (run_tests is not defined or '08_selective_tags' in run_tests) and (skip_tests is not defined or '08_selective_tags' not in skip_tests)
 - import_playbook: 10_stressvms.yaml
+  when: (run_tests is not defined or '10_stressvms' in run_tests) and (skip_tests is not defined or '10_stressvms' not in skip_tests)
 - import_playbook: 12_maintenance.yaml
+  when: (run_tests is not defined or '12_maintenance' in run_tests) and (skip_tests is not defined or '12_maintenance' not in skip_tests)
 - import_playbook: 13_skip_server_name.yaml
+  when: (run_tests is not defined or '13_skip_server_name' in run_tests) and (skip_tests is not defined or '13_skip_server_name' not in skip_tests)
 - import_playbook: 14_threshold.yaml
+  when: (run_tests is not defined or '14_threshold' in run_tests) and (skip_tests is not defined or '14_threshold' not in skip_tests)
 - import_playbook: 15_orchestrated.yaml
+  when: (run_tests is not defined or '15_orchestrated' in run_tests) and (skip_tests is not defined or '15_orchestrated' not in skip_tests)
 - import_playbook: 16_shutoff_error.yaml
+  when: (run_tests is not defined or '16_shutoff_error' in run_tests) and (skip_tests is not defined or '16_shutoff_error' not in skip_tests)
 - import_playbook: 17_reserved_advanced.yaml
+  when: (run_tests is not defined or '17_reserved_advanced' in run_tests) and (skip_tests is not defined or '17_reserved_advanced' not in skip_tests)
 - import_playbook: 18_k8s_events.yaml
+  when: (run_tests is not defined or '18_k8s_events' in run_tests) and (skip_tests is not defined or '18_k8s_events' not in skip_tests)
 - import_playbook: 19_healthcheck.yaml
+  when: (run_tests is not defined or '19_healthcheck' in run_tests) and (skip_tests is not defined or '19_healthcheck' not in skip_tests)
 - import_playbook: 20_evacuation_retry.yaml
+  when: (run_tests is not defined or '20_evacuation_retry' in run_tests) and (skip_tests is not defined or '20_evacuation_retry' not in skip_tests)
 - import_playbook: 21_continue_on_failure.yaml
+  when: (run_tests is not defined or '21_continue_on_failure' in run_tests) and (skip_tests is not defined or '21_continue_on_failure' not in skip_tests)
 - import_playbook: 22_reconciliation.yaml
+  when: (run_tests is not defined or '22_reconciliation' in run_tests) and (skip_tests is not defined or '22_reconciliation' not in skip_tests)
 - import_playbook: 23_heartbeat.yaml
+  when: (run_tests is not defined or '23_heartbeat' in run_tests) and (skip_tests is not defined or '23_heartbeat' not in skip_tests)
 - import_playbook: 24_application_credentials.yaml
+  when: (run_tests is not defined or '24_application_credentials' in run_tests) and (skip_tests is not defined or '24_application_credentials' not in skip_tests)
 - import_playbook: 25_prometheus_metrics.yaml
+  when: (run_tests is not defined or '25_prometheus_metrics' in run_tests) and (skip_tests is not defined or '25_prometheus_metrics' not in skip_tests)
 - import_playbook: 26_threshold_tagged_aggregates.yaml
+  when: (run_tests is not defined or '26_threshold_tagged_aggregates' in run_tests) and (skip_tests is not defined or '26_threshold_tagged_aggregates' not in skip_tests)
 # kdump last - it increases compute boot time and can affect subsequent tests
 - import_playbook: 09_kdump.yaml
+  when: (run_tests is not defined or '09_kdump' in run_tests) and (skip_tests is not defined or '09_kdump' not in skip_tests)
 - import_playbook: 99_gen_junitxml.yaml
 - import_playbook: 99_cleanup.yaml
