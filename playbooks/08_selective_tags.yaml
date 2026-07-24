@@ -320,7 +320,7 @@
     - name: 08 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
-      retries: 30
+      retries: 60
       delay: 10
       changed_when: false
 
