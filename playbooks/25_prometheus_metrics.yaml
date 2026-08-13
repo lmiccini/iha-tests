@@ -61,6 +61,8 @@
     - name: 25 Wait for config to take effect
       ansible.builtin.shell: |
         oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      register: config_effect_result
+      until: config_effect_result.rc == 0
       retries: 30
       delay: 10
       changed_when: false
