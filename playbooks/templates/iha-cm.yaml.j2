@@ -11,6 +11,7 @@ data:
       DELTA: "{{ delta | default('30') }}"
       DELAY: "{{ delay | default('150') }}"
       POLL: "{{ poll | default('45') }}"
+      FENCE_AFTER_DOWN_CYCLES: "{{ fence_after_down_cycles | default('1') }}"
       THRESHOLD: "{{ threshold | default('50') }}"
       WORKERS: "{{ workers | default('4') }}"
       RESERVED_HOSTS: "{{ reserved_hosts | default('false') }}"

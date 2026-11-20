@@ -465,3 +465,17 @@ goal: verify threshold behavior scoped to tagged aggregates.
 5. verify logs show threshold exceeded
 6. verify ThresholdExceeded K8s event is emitted
 7. cleanup
+
+
+## 27_FENCE_GRACE_PERIOD
+
+goal: verify FENCE_AFTER_DOWN_CYCLES defers fencing until a host has been down for N consecutive poll cycles.
+
+1. set POLL=15 and FENCE_AFTER_DOWN_CYCLES=4
+2. create vm c1-fence-grace on compute-0
+3. crash compute-0
+4. verify logs show fencing is deferred and vm is NOT evacuated while within the grace period
+5. verify a HostDownGrace K8s event is emitted
+6. verify vm is eventually evacuated once the grace period elapses
+7. verify the final HostDown event reports the exhausted down-cycle count
+8. cleanup

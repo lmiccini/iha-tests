@@ -1,0 +1,280 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: 27 Configure fence grace period test
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "27-test-fence-grace-period"
+
+  pre_tasks:
+    - name: 27 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 27 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 27 Create results file (failure)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: false
+
+    - name: 27 Configure a short POLL and a multi-cycle fencing grace period
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+      vars:
+        poll: "15"
+        fence_after_down_cycles: "4"
+
+    - name: 27 Apply grace period config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 27 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 27 Wait for config to take effect
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=20 | grep -q "Poll cycle completed"
+      register: config_effect_result
+      until: config_effect_result.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: 27 Wait for compute-0 resource provider to be available in placement
+      ansible.builtin.shell: |
+        compute0_hostname="{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+        rp_uuid=$(openstack --os-cloud default resource provider list -f value -c uuid -c name | grep "$compute0_hostname" | awk '{print $1}')
+        traits=$(openstack --os-cloud default resource provider trait list $rp_uuid -f value)
+        echo "$traits" | grep -q "COMPUTE_IMAGE_TYPE_QCOW2" && ! echo "$traits" | grep -q "COMPUTE_STATUS_DISABLED"
+      register: trait_check
+      until: trait_check.rc == 0
+      retries: 24
+      delay: 5
+      changed_when: false
+
+    - name: 27 Create instance on compute-0
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: present
+        availability_zone: nova:{{ compute_zero_hostname }}
+        name: c1-fence-grace
+        image: cirros-0.6.2-iha-x86_64-disk.img
+        timeout: 200
+        flavor: iha.nano
+        security_groups:
+          - ping
+        nics:
+          - net-name: ihanet
+
+- name: 27 Crash compute-0
+  hosts: hypervisor
+  remote_user: zuul
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: 27 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+  tasks:
+    - name: 27 Format compute-0 VM name for libvirt
+      ansible.builtin.set_fact:
+        compute_zero_vm_name: cifmw-{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | map('regex_replace',
+          '\.ctlplane\.example\.com$', '') | first }}
+
+    - name: 27 Destroy the compute-0 VM on libvirt
+      community.libvirt.virt:
+        name: "{{ compute_zero_vm_name }}"
+        state: destroyed
+
+- name: 27 Verify fencing is deferred then eventually happens
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  pre_tasks:
+    - name: 27 Load and set compute details from JSON file as a fact
+      ansible.builtin.set_fact:
+        compute_details: "{{ (lookup('file', '/tmp/compute_details.json') | from_json) }}"
+
+    - name: 27 Set compute_zero_hostname fact for compute-0
+      ansible.builtin.set_fact:
+        compute_zero_hostname: "{{ compute_details | selectattr('readable_hostname', 'equalto', 'compute-0') | map(attribute='hostname') | first }}"
+
+  tasks:
+    - name: 27 Wait for compute-0 to transition to down
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'down'
+      retries: 24
+      delay: 5
+
+    - name: 27 Wait for instanceha to log that fencing is being deferred
+      ansible.builtin.shell: |
+        oc -n openstack logs deploy/instanceha-0 --tail=200
+      register: deferred_logs
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: "'Deferring fencing' in deferred_logs.stdout"
+
+    - name: 27 Assert deferral log message was found
+      ansible.builtin.assert:
+        that:
+          - "'Deferring fencing' in deferred_logs.stdout"
+        fail_msg: "No 'Deferring fencing' message found in instanceha logs within the grace period"
+
+    - name: 27 Verify VM was NOT evacuated yet (still within grace period)
+      openstack.cloud.server_info:
+        cloud: default
+        name: c1-fence-grace
+      register: vm_info_during_grace
+
+    - name: 27 Assert VM is still on compute-0 during the grace period
+      ansible.builtin.assert:
+        that:
+          - vm_info_during_grace.servers[0].hypervisor_hostname == compute_zero_hostname
+        fail_msg: "c1-fence-grace was evacuated before the fencing grace period elapsed"
+        success_msg: "PASSED — c1-fence-grace stayed on compute-0 during the grace period"
+
+    - name: 27 Check for HostDownGrace K8s event
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=HostDownGrace --no-headers 2>/dev/null | grep -c 'HostDownGrace' || echo 0
+      register: grace_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: grace_events.stdout | int > 0
+
+    - name: 27 Verify HostDownGrace event was emitted
+      ansible.builtin.debug:
+        msg: "Found {{ grace_events.stdout }} HostDownGrace events"
+
+    - name: 27 Wait for the grace period to elapse and VM to be evacuated
+      openstack.cloud.server_info:
+        cloud: default
+        name: c1-fence-grace
+      register: vm_info
+      retries: 40
+      delay: 10
+      until:
+        - vm_info.servers | length > 0
+        - vm_info.servers[0].status == "ACTIVE"
+        - vm_info.servers[0].hypervisor_hostname != compute_zero_hostname
+
+    - name: 27 Assert VM was eventually evacuated once the grace period elapsed
+      ansible.builtin.assert:
+        that:
+          - vm_info.servers[0].status == "ACTIVE"
+          - vm_info.servers[0].hypervisor_hostname != compute_zero_hostname
+        fail_msg: >
+          c1-fence-grace was not evacuated after the fencing grace period elapsed.
+          Status={{ vm_info.servers[0].status }}, host={{ vm_info.servers[0].hypervisor_hostname }}
+
+    - name: 27 Check for HostDown K8s event reporting the exhausted down-cycle count
+      ansible.builtin.shell: |
+        oc get events -n openstack --field-selector reason=HostDown -o jsonpath='{.items[*].message}' 2>/dev/null | grep -c 'down cycles)' || echo 0
+      register: hostdown_cycle_events
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: hostdown_cycle_events.stdout | int > 0
+
+    - name: 27 Verify HostDown event reported the down-cycle count
+      ansible.builtin.debug:
+        msg: "Found {{ hostdown_cycle_events.stdout }} HostDown event(s) reporting down-cycle counts"
+
+    - name: 27 Wait for compute-0 to transition to up
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='state') | first) == 'up'
+      retries: 36
+      delay: 5
+
+    - name: 27 Wait for compute-0 to transition to enabled
+      openstack.cloud.compute_service_info:
+        cloud: default
+      register: hypervisor_list
+      until: (hypervisor_list.compute_services | selectattr('host', 'equalto', compute_zero_hostname) | map(attribute='status') | first) == 'enabled'
+      retries: 60
+      delay: 5
+
+    - name: 27 Save logs to results
+      ansible.builtin.shell: oc -n openstack logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+      vars:
+        name: "27-test-fence-grace-period"
+
+- name: 27 Cleanup
+  hosts: controller-0
+  remote_user: zuul
+  gather_facts: false
+
+  vars:
+    name: "27-test-fence-grace-period"
+
+  tasks:
+    - name: 27 Remove test VM
+      openstack.cloud.server:
+        cloud: default
+        auth:
+          project_name: admin
+        state: absent
+        name: c1-fence-grace
+
+    - name: 27 save logs
+      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      changed_when: false
+
+    - name: 27 Reset iha configmap
+      ansible.builtin.template:
+        src: templates/iha-cm.yaml.j2
+        dest: /home/zuul/iha-cm.yaml
+
+    - name: 27 Apply default config
+      ansible.builtin.shell: |
+        oc -n openstack apply -f /home/zuul/iha-cm.yaml
+      changed_when: false
+
+    - name: 27 Wait for instanceha deployment to be available
+      ansible.builtin.shell: |
+        oc wait deployment/instanceha-0 -n openstack --for condition=Available --timeout=300s
+      changed_when: false
+
+    - name: 27 Create results file (success)
+      ansible.builtin.template:
+        src: templates/iha-tests-results.xml.j2
+        dest: /home/zuul/iha-tests-results/{{ name }}.xml
+      vars:
+        success: true

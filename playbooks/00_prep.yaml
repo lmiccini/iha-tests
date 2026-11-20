@@ -19,10 +19,12 @@
   gather_facts: false
   tasks:
     - name: Install openstackclient
-      ansible.builtin.pip:
+      ansible.builtin.package:
         name:
-          - openstackclient
-          - osc-placement
+          - python3-openstackclient
+          - python3-osc-placement
+        state: present
+      become: true
 
     - name: Create dir
       ansible.builtin.file:
@@ -34,6 +36,35 @@
       ansible.builtin.shell: |
         oc -n openstack exec openstackclient -- cat .config/openstack/secure.yaml > /home/zuul/.config/openstack/secure.yaml
         oc -n openstack exec openstackclient -- cat .config/openstack/clouds.yaml > /home/zuul/.config/openstack/clouds.yaml
+
+    - name: Fetch OpenStack public CA bundle
+      ansible.builtin.shell: |
+        oc get secret combined-ca-bundle -n openstack -o jsonpath='{.data.tls-ca-bundle\.pem}' | base64 -d
+      register: openstack_ca_bundle
+      changed_when: false
+
+    - name: Write OpenStack CA bundle for openstacksdk
+      ansible.builtin.copy:
+        content: "{{ openstack_ca_bundle.stdout }}"
+        dest: /home/zuul/.config/openstack/ca-bundle.pem
+        mode: '0644'
+
+    - name: Trust OpenStack CA bundle in clouds.yaml
+      ansible.builtin.lineinfile:
+        path: /home/zuul/.config/openstack/clouds.yaml
+        insertafter: '^\s*region_name: regionOne$'
+        line: "        cacert: /home/zuul/.config/openstack/ca-bundle.pem"
+
+    - name: Trust OpenStack CA bundle system-wide
+      ansible.builtin.copy:
+        content: "{{ openstack_ca_bundle.stdout }}"
+        dest: /etc/pki/ca-trust/source/anchors/openstack-combined-ca.pem
+        mode: '0644'
+      become: true
+
+    - name: Update system CA trust
+      ansible.builtin.command: update-ca-trust
+      become: true
 
     - name: Get all projects
       openstack.cloud.project_info:
