@@ -64,6 +64,8 @@
   when: (run_tests is not defined or '25_prometheus_metrics' in run_tests) and (skip_tests is not defined or '25_prometheus_metrics' not in skip_tests)
 - import_playbook: 26_threshold_tagged_aggregates.yaml
   when: (run_tests is not defined or '26_threshold_tagged_aggregates' in run_tests) and (skip_tests is not defined or '26_threshold_tagged_aggregates' not in skip_tests)
+- import_playbook: 27_fence_grace_period.yaml
+  when: (run_tests is not defined or '27_fence_grace_period' in run_tests) and (skip_tests is not defined or '27_fence_grace_period' not in skip_tests)
 # kdump last - it increases compute boot time and can affect subsequent tests
 - import_playbook: 09_kdump.yaml
   when: (run_tests is not defined or '09_kdump' in run_tests) and (skip_tests is not defined or '09_kdump' not in skip_tests)
