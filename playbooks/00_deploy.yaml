@@ -71,9 +71,9 @@
 
     - name: Deploy OCP resources
       ansible.builtin.shell: |
-        oc project openstack; oc apply -f ~/fencing-secret.yaml
-        oc project openstack; oc apply -f ~/iha-cm.yaml
-        oc project openstack; oc apply -f ~/iha.yaml
+        oc apply -n openstack -f ~/fencing-secret.yaml
+        oc apply -n openstack -f ~/iha-cm.yaml
+        oc apply -n openstack -f ~/iha.yaml
       changed_when: false
 
     - name: Wait until InstanceHA pod is ready

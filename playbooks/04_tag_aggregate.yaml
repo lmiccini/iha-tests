@@ -64,7 +64,7 @@
 
     - name: Apply config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
     - name: 04 fetch random string
@@ -251,7 +251,7 @@
   tasks:
     - name: 04 Check logs
       ansible.builtin.shell: |
-        oc logs deploy/instanceha-0
+        oc logs -n openstack deploy/instanceha-0
       register: logs
       changed_when: false
       retries: 180
@@ -369,7 +369,7 @@
       delay: 5
 
     - name: 04 save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc logs -n openstack deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
     - name: 04 Create results file (success)

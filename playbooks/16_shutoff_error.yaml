@@ -359,7 +359,7 @@
         name: vm-error
 
     - name: 16 save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc logs -n openstack deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
     - name: 16 Reset iha configmap
