@@ -190,7 +190,7 @@
 
     - name: Apply new config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
     - name: 07 Wait for config to take effect
@@ -558,7 +558,7 @@
       until: "'Failed evacuating' in instanceha_logs.log"
 
     - name: 07 save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc logs -n openstack deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
     - name: 07 Create results file (success)
@@ -589,7 +589,7 @@
 
     - name: Apply new config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
 - name: 07 Cleanup VMs

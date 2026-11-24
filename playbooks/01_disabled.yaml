@@ -28,7 +28,7 @@
 
     - name: 01 cleanup iha and start fresh
       ansible.builtin.shell: |
-        oc delete instanceha instanceha-0
+        oc delete -n openstack instanceha instanceha-0
       changed_when: false
 
     - name: 01 template config
@@ -43,8 +43,8 @@
 
     - name: 01 apply config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
-        oc apply -f /home/zuul/iha.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha.yaml
       changed_when: false
 
     - name: 01 fetch random string
@@ -86,7 +86,7 @@
 
     - name: 01 Apply new config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
     - name: 01 Wait for compute-0 resource provider to be available in placement
@@ -135,7 +135,7 @@
   tasks:
     - name: 01 Check logs
       ansible.builtin.shell: |
-        oc logs deploy/instanceha-0
+        oc logs -n openstack deploy/instanceha-0
       register: logs
       changed_when: false
       retries: 180
@@ -143,7 +143,7 @@
       until: "'INFO InstanceHa DISABLE is true, not evacuating' in logs.stdout or 'INFO InstanceHA DISABLED is true, not evacuating' in logs.stdout"
 
     - name: 01 Save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc logs -n openstack deploy/instanceha-0 > /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
     - name: 01 Update DISABLED parameter in instanceha-config configmap
@@ -153,7 +153,7 @@
 
     - name: 01 Apply new config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
     - name: 01 Fetch HYPERVISOR2 for instance
@@ -204,7 +204,7 @@
       delay: 5
 
     - name: 01 Save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc logs -n openstack deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
     - name: 01 Create results file (success)

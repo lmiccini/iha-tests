@@ -22,7 +22,7 @@
     _final_action: "{{ final_action | default('reboot') }}"
   tasks:
     - shell: |
-        oc rsh deployment/instanceha-0 bash -c 'wc -l /var/lib/instanceha/instanceha.py' |awk '{print $1}'
+        oc rsh -n openstack deployment/instanceha-0 bash -c 'wc -l /var/lib/instanceha/instanceha.py' |awk '{print $1}'
       register: size
 
     - name: Define Variable
@@ -78,7 +78,7 @@
 
     - name: 09 Apply config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
     - name: 09 Set networkattachment
@@ -90,7 +90,7 @@
 
     - name: 09 Apply the changes
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha.yaml
+        oc apply -n openstack -f /home/zuul/iha.yaml
       changed_when: false
 
     - name: 09 Wait iha to be ready
@@ -100,7 +100,7 @@
 
     - name: 09 Get ip address
       ansible.builtin.shell: |
-         oc get instanceha -o json |jq -r '.items[0].status.networkAttachments["openstack/internalapi"][0]'
+         oc get instanceha -n openstack -o json |jq -r '.items[0].status.networkAttachments["openstack/internalapi"][0]'
       register: podip
       changed_when: false
 
@@ -241,7 +241,7 @@
 
     - name: 99 check logs and see if we received the kdump msgs compute0
       ansible.builtin.shell: |
-        oc logs deploy/instanceha-0 |grep "{{ hostvars['controller-0']['compute0'] }}"
+        oc logs -n openstack deploy/instanceha-0 |grep "{{ hostvars['controller-0']['compute0'] }}"
       register: logs
       changed_when: false
       retries: 180
@@ -254,7 +254,7 @@
 #      when: grep.rc != 0
 
     - name: 09 save logs
-      ansible.builtin.shell: oc logs deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
+      ansible.builtin.shell: oc logs -n openstack deploy/instanceha-0 >> /home/zuul/iha-tests-results/{{ name }}.log
       changed_when: false
 
     - name: 09 Remove vm
@@ -324,7 +324,7 @@
 
     - name: 09 Apply config
       ansible.builtin.shell: |
-        oc apply -f /home/zuul/iha-cm.yaml
+        oc apply -n openstack -f /home/zuul/iha-cm.yaml
       changed_when: false
 
     - name: 09 Create results file (success)
